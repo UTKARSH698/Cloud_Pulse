@@ -1,0 +1,5 @@
+# Lambda runtime already provides boto3 — only list third-party deps here.
+# This file is used by both pip install (local dev) and the Terraform
+# archive_file + null_resource that zips the deployment package.
+
+pydantic>=2.0,<3.0

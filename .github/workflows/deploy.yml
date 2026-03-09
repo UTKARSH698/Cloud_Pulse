@@ -1,0 +1,286 @@
+# ============================================================
+# .github/workflows/deploy.yml
+#
+# CI/CD pipeline for CloudPulse.
+#
+# Triggers
+# --------
+#   push to main   → full test + deploy to dev
+#   pull_request   → test + terraform plan only (no deploy)
+#   workflow_dispatch → manual deploy with environment choice
+#
+# Jobs
+#   1. test      — pytest (both Lambdas, mocked boto3)
+#   2. plan      — terraform init + plan (all branches / PRs)
+#   3. deploy    — terraform apply + smoke test (main branch only)
+#
+# Required GitHub Secrets
+# -----------------------
+#   AWS_ACCESS_KEY_ID       — IAM user with deploy permissions
+#   AWS_SECRET_ACCESS_KEY   — ^
+#   AWS_REGION              — e.g. us-east-1
+# ============================================================
+
+name: CloudPulse CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "dev"
+        type: choice
+        options: [dev, staging, prod]
+
+env:
+  PYTHON_VERSION: "3.11"
+  TF_VERSION:     "1.7.4"
+  AWS_REGION:     ${{ secrets.AWS_REGION }}
+  ENVIRONMENT:    ${{ github.event.inputs.environment || 'dev' }}
+
+# ============================================================
+# Job 1 — Unit tests
+# ============================================================
+
+jobs:
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install ingest dependencies
+        run: pip install -r lambdas/ingest/requirements.txt
+
+      - name: Install query dependencies
+        run: pip install -r lambdas/query/requirements.txt
+
+      - name: Install test dependencies
+        run: pip install pytest pytest-cov
+
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ \
+            --cov=lambdas/ingest \
+            --cov=lambdas/query \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            -v
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+# ============================================================
+# Job 2 — Terraform plan
+# ============================================================
+
+  plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    needs: test    # only plan if tests pass
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Set up Terraform ${{ env.TF_VERSION }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      # Install pydantic into Lambda source dirs so archive_file
+      # includes it in the ZIP — must happen before terraform plan
+      - name: Install Lambda dependencies into source dirs
+        run: |
+          pip install -r lambdas/ingest/requirements.txt -t lambdas/ingest/ --upgrade --quiet
+          pip install -r lambdas/query/requirements.txt  -t lambdas/query/  --upgrade --quiet
+
+      - name: Create .build directory
+        run: mkdir -p .build
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init -input=false
+
+      - name: Terraform Validate
+        working-directory: terraform
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: terraform
+        run: |
+          terraform plan \
+            -var="environment=${{ env.ENVIRONMENT }}" \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -input=false \
+            -out=tfplan
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ env.ENVIRONMENT }}
+          path: terraform/tfplan
+
+# ============================================================
+# Job 3 — Deploy (main branch only)
+# ============================================================
+
+  deploy:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    needs: plan
+    # Only deploy on push to main OR manual trigger — never on PRs
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    environment: ${{ github.event.inputs.environment || 'dev' }}   # GitHub environment for approval gates
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Set up Terraform ${{ env.TF_VERSION }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false   # disable wrapper so we can parse output as JSON
+
+      - name: Install Lambda dependencies into source dirs
+        run: |
+          pip install -r lambdas/ingest/requirements.txt -t lambdas/ingest/ --upgrade --quiet
+          pip install -r lambdas/query/requirements.txt  -t lambdas/query/  --upgrade --quiet
+
+      - name: Create .build directory
+        run: mkdir -p .build
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init -input=false
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ env.ENVIRONMENT }}
+          path: terraform
+
+      - name: Terraform Apply
+        working-directory: terraform
+        run: terraform apply -input=false tfplan
+
+      # ── Capture outputs for smoke test ─────────────────────
+
+      - name: Export Terraform outputs
+        id: tf_outputs
+        working-directory: terraform
+        run: |
+          echo "api_endpoint=$(terraform output -raw api_endpoint)"       >> $GITHUB_OUTPUT
+          echo "cognito_client_id=$(terraform output -raw cognito_client_id)" >> $GITHUB_OUTPUT
+          echo "cognito_pool_id=$(terraform output -raw cognito_user_pool_id)" >> $GITHUB_OUTPUT
+          echo "crawler_name=$(terraform output -raw glue_crawler_name)"  >> $GITHUB_OUTPUT
+
+      # ── Smoke test — create a test user, get a token, ingest ──
+
+      - name: Create smoke-test Cognito user
+        run: |
+          aws cognito-idp admin-create-user \
+            --user-pool-id "${{ steps.tf_outputs.outputs.cognito_pool_id }}" \
+            --username "smoketest@cloudpulse.dev" \
+            --temporary-password "TempPass123!" \
+            --message-action SUPPRESS || true   # ignore if user already exists
+
+          aws cognito-idp admin-set-user-password \
+            --user-pool-id "${{ steps.tf_outputs.outputs.cognito_pool_id }}" \
+            --username "smoketest@cloudpulse.dev" \
+            --password "SmokeTest@9999" \
+            --permanent
+
+      - name: Get Cognito access token
+        id: auth
+        run: |
+          TOKEN=$(aws cognito-idp initiate-auth \
+            --auth-flow USER_PASSWORD_AUTH \
+            --client-id "${{ steps.tf_outputs.outputs.cognito_client_id }}" \
+            --auth-parameters \
+                USERNAME=smoketest@cloudpulse.dev,PASSWORD=SmokeTest@9999 \
+            --query 'AuthenticationResult.AccessToken' \
+            --output text)
+          echo "token=$TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Smoke test — ingest single event
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${{ steps.tf_outputs.outputs.api_endpoint }}/events" \
+            -H "Authorization: Bearer ${{ steps.auth.outputs.token }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "event_type": "page_view",
+              "session_id": "ci-smoke-session",
+              "source": "api",
+              "properties": { "page": "/ci-smoke-test", "build": "${{ github.run_number }}" }
+            }')
+
+          echo "Ingest response status: $STATUS"
+          [ "$STATUS" = "200" ] || (echo "Smoke test FAILED — expected 200, got $STATUS" && exit 1)
+
+      - name: Smoke test — ingest batch
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${{ steps.tf_outputs.outputs.api_endpoint }}/events/batch" \
+            -H "Authorization: Bearer ${{ steps.auth.outputs.token }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "events": [
+                {"event_type":"click","session_id":"ci-smoke-session","source":"api","properties":{"element":"btn-test"}},
+                {"event_type":"api_call","session_id":"ci-smoke-session","source":"api","properties":{"endpoint":"/health"}}
+              ]
+            }')
+
+          echo "Batch ingest response status: $STATUS"
+          [ "$STATUS" = "200" ] || (echo "Batch smoke test FAILED — expected 200, got $STATUS" && exit 1)
+
+      - name: Run Glue Crawler (registers new partitions for Athena)
+        run: |
+          aws glue start-crawler --name "${{ steps.tf_outputs.outputs.crawler_name }}"
+          echo "Crawler started — runs async, check AWS console for completion"
+
+      - name: Smoke test summary
+        run: |
+          echo "✓ Terraform apply succeeded"
+          echo "✓ Ingest single event: 200"
+          echo "✓ Ingest batch (2 events): 200"
+          echo "✓ Glue Crawler triggered"
+          echo "API: ${{ steps.tf_outputs.outputs.api_endpoint }}"
