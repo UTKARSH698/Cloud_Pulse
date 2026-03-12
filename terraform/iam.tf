@@ -314,6 +314,36 @@ resource "aws_iam_role_policy_attachment" "query_ssm" {
 }
 
 # ============================================================
+# API GATEWAY CLOUDWATCH LOGS ROLE
+# ============================================================
+#
+# API Gateway needs an account-level IAM role to write access
+# logs to CloudWatch. This is a one-time account setting that
+# must be set before access_log_settings on a stage will work.
+
+resource "aws_iam_role" "api_gateway_cloudwatch" {
+  name               = "${local.name_prefix}-apigw-cw-role"
+  assume_role_policy = data.aws_iam_policy_document.apigw_assume_role.json
+}
+
+data "aws_iam_policy_document" "apigw_assume_role" {
+  statement {
+    sid     = "ApiGatewayAssumeRole"
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["apigateway.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "api_gateway_cloudwatch" {
+  role       = aws_iam_role.api_gateway_cloudwatch.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
+}
+
+# ============================================================
 # GLUE CRAWLER ROLE
 # ============================================================
 #

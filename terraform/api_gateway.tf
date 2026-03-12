@@ -320,10 +320,18 @@ resource "aws_api_gateway_deployment" "cloudpulse" {
   ]
 }
 
+# Sets the CloudWatch Logs role ARN at the account level — required
+# for access_log_settings to work on any API Gateway stage in this account.
+resource "aws_api_gateway_account" "cloudpulse" {
+  cloudwatch_role_arn = aws_iam_role.api_gateway_cloudwatch.arn
+}
+
 resource "aws_api_gateway_stage" "cloudpulse" {
   rest_api_id   = aws_api_gateway_rest_api.cloudpulse.id
   deployment_id = aws_api_gateway_deployment.cloudpulse.id
   stage_name    = var.api_stage
+
+  depends_on = [aws_api_gateway_account.cloudpulse]
 
   # Structured access logs to CloudWatch
   access_log_settings {

@@ -83,9 +83,10 @@ resource "aws_glue_crawler" "events" {
   }
 
   # How to handle schema drift
+  # CRAWL_NEW_FOLDERS_ONLY requires both behaviors to be LOG
   schema_change_policy {
-    update_behavior = "UPDATE_IN_DATABASE"   # add new columns automatically
-    delete_behavior = "LOG"                  # log deleted partitions, don't remove
+    update_behavior = "LOG"   # required for CRAWL_NEW_FOLDERS_ONLY
+    delete_behavior = "LOG"   # log deleted partitions, don't remove
   }
 
   # Crawler configuration — produces one table named "events"
