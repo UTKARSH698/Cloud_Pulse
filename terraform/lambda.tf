@@ -121,9 +121,10 @@ resource "aws_lambda_function" "query" {
 
   environment {
     variables = {
-      ENVIRONMENT  = var.environment
-      LOG_LEVEL    = var.environment == "prod" ? "WARNING" : "INFO"
+      ENVIRONMENT      = var.environment
+      LOG_LEVEL        = var.environment == "prod" ? "WARNING" : "INFO"
       POWERTOOLS_SERVICE_NAME = "${local.name_prefix}-query"
+      ATHENA_WORKGROUP = var.athena_workgroup
     }
   }
 

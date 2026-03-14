@@ -27,3 +27,5 @@ lambdas/query/typing_extensions*
 # Secrets
 *.env
 tf_outputs.json
+terraform/payload.json
+terraform/response.json

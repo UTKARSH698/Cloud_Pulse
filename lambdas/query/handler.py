@@ -171,9 +171,11 @@ def _build_sql(req: QueryRequest, database: str, table: str) -> str:
 
 def _run_query(sql: str, output_location: str) -> str:
     """Submit query and return execution_id."""
+    workgroup = os.environ.get("ATHENA_WORKGROUP", "primary")
     resp = _athena.start_query_execution(
         QueryString=sql,
         ResultConfiguration={"OutputLocation": output_location},
+        WorkGroup=workgroup,
     )
     execution_id: str = resp["QueryExecutionId"]
     logger.info(f"Athena query submitted: execution_id={execution_id}")
