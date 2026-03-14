@@ -2,17 +2,23 @@
 cloudpulse/lambdas/ingest/handler.py
 
 Ingest Lambda — receives analytics events from API Gateway,
-validates them, and writes each to S3 with Hive-style partitioning.
+validates them, and dual-writes each to S3 (batch path) and
+Kinesis Data Stream (speed path / real-time analytics).
 
 Flow
 ----
 API Gateway (POST /events or POST /events/batch)
   → Cognito JWT authorizer (handled by API GW, not here)
   → THIS Lambda
-      1. Read S3 bucket / prefix from Parameter Store (cached in-process)
+      1. Read S3 bucket / prefix / Kinesis stream from Parameter Store (cached)
       2. Parse & validate JSON body with Pydantic
-      3. Write each event as a single JSON object to S3
-      4. Return 200 / 207 / 4xx to API Gateway
+      3. Write each event as a single JSON object to S3      (batch path)
+      4. Put each accepted event to Kinesis Data Stream      (speed path)
+      5. Return 200 / 207 / 4xx to API Gateway
+
+Kinesis is fail-open: if the put_record call fails, the event is still
+accepted (it was already written to S3). The stream failure is logged
+but does not cause a 207 partial-failure response.
 
 Environment variables
 ---------------------
@@ -20,8 +26,9 @@ ENVIRONMENT   dev | staging | prod   (set by Terraform, default: dev)
 
 Parameter Store keys (read at runtime)
 ---------------------------------------
-/cloudpulse/{env}/s3_bucket   — target S3 bucket name
-/cloudpulse/{env}/s3_prefix   — S3 key prefix (e.g. "events")
+/cloudpulse/{env}/s3_bucket       — target S3 bucket name
+/cloudpulse/{env}/s3_prefix       — S3 key prefix (e.g. "events")
+/cloudpulse/{env}/kinesis_stream  — Kinesis stream name
 """
 
 from __future__ import annotations
@@ -49,8 +56,9 @@ logger.setLevel(logging.INFO)
 # AWS clients — module-level so Lambda container reuse keeps them warm
 # ---------------------------------------------------------------------------
 
-_s3  = boto3.client("s3")
-_ssm = boto3.client("ssm")
+_s3      = boto3.client("s3")
+_ssm     = boto3.client("ssm")
+_kinesis = boto3.client("kinesis")
 
 # In-process cache so repeated invocations skip SSM round-trips
 _param_cache: dict[str, str] = {}
@@ -106,6 +114,30 @@ def _decode_body(raw_event: dict) -> dict | None:
     except json.JSONDecodeError as exc:
         logger.warning(f"Body JSON decode failed: {exc}")
         return None
+
+
+def _put_to_kinesis(event: AnalyticsEvent, stream_name: str) -> None:
+    """
+    Put one event record onto the Kinesis Data Stream (speed path).
+
+    Fail-open: exceptions are logged but NOT re-raised. The caller
+    should not treat a Kinesis failure as an event rejection — the
+    event is already durably stored in S3.
+
+    The partition key is the session_id so records from the same
+    session land on the same shard, preserving per-session ordering.
+    """
+    try:
+        record = event.to_s3_record()
+        _kinesis.put_record(
+            StreamName=stream_name,
+            Data=json.dumps(record, default=str).encode("utf-8"),
+            PartitionKey=str(event.session_id),
+        )
+        logger.debug(f"event_id={event.event_id} → Kinesis stream={stream_name}")
+    except Exception as exc:
+        # Fail-open: S3 write already succeeded; stream failure is non-fatal
+        logger.warning(f"Kinesis put_record failed for event_id={event.event_id}: {exc}")
 
 
 def _write_to_s3(event: AnalyticsEvent, bucket: str, prefix: str) -> bool:
@@ -177,8 +209,9 @@ def handler(event: dict, context: Any) -> dict:
     # ── 1. Resolve config from Parameter Store ────────────────────────────
     env = os.environ.get("ENVIRONMENT", "dev")
     try:
-        s3_bucket = _get_parameter(f"/cloudpulse/{env}/s3_bucket")
-        s3_prefix = _get_parameter(f"/cloudpulse/{env}/s3_prefix")
+        s3_bucket      = _get_parameter(f"/cloudpulse/{env}/s3_bucket")
+        s3_prefix      = _get_parameter(f"/cloudpulse/{env}/s3_prefix")
+        kinesis_stream = _get_parameter(f"/cloudpulse/{env}/kinesis_stream")
     except ClientError:
         return _api_response(500, {"error": "Service configuration unavailable — check SSM parameters"})
 
@@ -221,6 +254,8 @@ def handler(event: dict, context: Any) -> dict:
     for evt in events_to_write:
         if _write_to_s3(evt, s3_bucket, s3_prefix):
             accepted_ids.append(str(evt.event_id))
+            # Speed path: put to Kinesis for real-time aggregation (fail-open)
+            _put_to_kinesis(evt, kinesis_stream)
         else:
             errors.append({
                 "event_id": str(evt.event_id),

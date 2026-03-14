@@ -48,6 +48,24 @@ resource "aws_ssm_parameter" "s3_prefix" {
   value       = var.s3_event_prefix
 }
 
+resource "aws_ssm_parameter" "kinesis_stream" {
+  name        = "/cloudpulse/${var.environment}/kinesis_stream"
+  description = "Kinesis Data Stream name — speed path for real-time analytics"
+  type        = "String"
+  value       = aws_kinesis_stream.events.name
+}
+
+# ------------------------------------------------------------
+# Stream Processor + Realtime Lambda parameters
+# ------------------------------------------------------------
+
+resource "aws_ssm_parameter" "dynamodb_table" {
+  name        = "/cloudpulse/${var.environment}/dynamodb_table"
+  description = "DynamoDB table — real-time per-minute metrics with 24h TTL"
+  type        = "String"
+  value       = aws_dynamodb_table.realtime.name
+}
+
 # ------------------------------------------------------------
 # Query Lambda parameters
 # ------------------------------------------------------------

@@ -111,6 +111,30 @@ resource "aws_iam_role_policy_attachment" "ingest_s3" {
   policy_arn = aws_iam_policy.ingest_s3.arn
 }
 
+# --- Policy: Kinesis PutRecord (speed path dual-write) ---
+
+data "aws_iam_policy_document" "ingest_kinesis" {
+  statement {
+    sid    = "PutStreamRecords"
+    effect = "Allow"
+    actions = [
+      "kinesis:PutRecord",
+      "kinesis:PutRecords",
+    ]
+    resources = [aws_kinesis_stream.events.arn]
+  }
+}
+
+resource "aws_iam_policy" "ingest_kinesis" {
+  name   = "${local.name_prefix}-ingest-kinesis"
+  policy = data.aws_iam_policy_document.ingest_kinesis.json
+}
+
+resource "aws_iam_role_policy_attachment" "ingest_kinesis" {
+  role       = aws_iam_role.ingest.name
+  policy_arn = aws_iam_policy.ingest_kinesis.arn
+}
+
 # --- Policy: SSM Parameter Store (ingest params only) ---
 
 data "aws_iam_policy_document" "ingest_ssm" {
@@ -123,6 +147,7 @@ data "aws_iam_policy_document" "ingest_ssm" {
     resources = [
       "arn:aws:ssm:${local.region}:${local.account_id}:parameter/cloudpulse/${var.environment}/s3_bucket",
       "arn:aws:ssm:${local.region}:${local.account_id}:parameter/cloudpulse/${var.environment}/s3_prefix",
+      "arn:aws:ssm:${local.region}:${local.account_id}:parameter/cloudpulse/${var.environment}/kinesis_stream",
     ]
   }
 }
@@ -135,6 +160,190 @@ resource "aws_iam_policy" "ingest_ssm" {
 resource "aws_iam_role_policy_attachment" "ingest_ssm" {
   role       = aws_iam_role.ingest.name
   policy_arn = aws_iam_policy.ingest_ssm.arn
+}
+
+# ============================================================
+# STREAM PROCESSOR LAMBDA ROLE
+# ============================================================
+
+resource "aws_iam_role" "stream_processor" {
+  name               = "${local.name_prefix}-stream-processor-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
+}
+
+data "aws_iam_policy_document" "stream_processor_kinesis" {
+  statement {
+    sid    = "ReadStream"
+    effect = "Allow"
+    actions = [
+      "kinesis:GetRecords",
+      "kinesis:GetShardIterator",
+      "kinesis:DescribeStream",
+      "kinesis:DescribeStreamSummary",
+      "kinesis:ListShards",
+      "kinesis:ListStreams",
+    ]
+    resources = [aws_kinesis_stream.events.arn]
+  }
+}
+
+resource "aws_iam_policy" "stream_processor_kinesis" {
+  name   = "${local.name_prefix}-stream-processor-kinesis"
+  policy = data.aws_iam_policy_document.stream_processor_kinesis.json
+}
+
+resource "aws_iam_role_policy_attachment" "stream_processor_kinesis" {
+  role       = aws_iam_role.stream_processor.name
+  policy_arn = aws_iam_policy.stream_processor_kinesis.arn
+}
+
+data "aws_iam_policy_document" "stream_processor_dynamodb" {
+  statement {
+    sid    = "WritMetrics"
+    effect = "Allow"
+    actions = [
+      "dynamodb:UpdateItem",
+      "dynamodb:PutItem",
+    ]
+    resources = [aws_dynamodb_table.realtime.arn]
+  }
+}
+
+resource "aws_iam_policy" "stream_processor_dynamodb" {
+  name   = "${local.name_prefix}-stream-processor-dynamodb"
+  policy = data.aws_iam_policy_document.stream_processor_dynamodb.json
+}
+
+resource "aws_iam_role_policy_attachment" "stream_processor_dynamodb" {
+  role       = aws_iam_role.stream_processor.name
+  policy_arn = aws_iam_policy.stream_processor_dynamodb.arn
+}
+
+data "aws_iam_policy_document" "stream_processor_ssm" {
+  statement {
+    sid    = "ReadStreamProcessorParams"
+    effect = "Allow"
+    actions = ["ssm:GetParameter"]
+    resources = [
+      "arn:aws:ssm:${local.region}:${local.account_id}:parameter/cloudpulse/${var.environment}/dynamodb_table",
+    ]
+  }
+}
+
+resource "aws_iam_policy" "stream_processor_ssm" {
+  name   = "${local.name_prefix}-stream-processor-ssm"
+  policy = data.aws_iam_policy_document.stream_processor_ssm.json
+}
+
+resource "aws_iam_role_policy_attachment" "stream_processor_ssm" {
+  role       = aws_iam_role.stream_processor.name
+  policy_arn = aws_iam_policy.stream_processor_ssm.arn
+}
+
+data "aws_iam_policy_document" "stream_processor_logs" {
+  statement {
+    sid    = "CreateLogGroup"
+    effect = "Allow"
+    actions = ["logs:CreateLogGroup"]
+    resources = ["arn:aws:logs:${local.region}:${local.account_id}:*"]
+  }
+  statement {
+    sid    = "WriteLogs"
+    effect = "Allow"
+    actions = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = [
+      "arn:aws:logs:${local.region}:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-stream-processor:*",
+    ]
+  }
+}
+
+resource "aws_iam_policy" "stream_processor_logs" {
+  name   = "${local.name_prefix}-stream-processor-logs"
+  policy = data.aws_iam_policy_document.stream_processor_logs.json
+}
+
+resource "aws_iam_role_policy_attachment" "stream_processor_logs" {
+  role       = aws_iam_role.stream_processor.name
+  policy_arn = aws_iam_policy.stream_processor_logs.arn
+}
+
+# ============================================================
+# REALTIME LAMBDA ROLE
+# ============================================================
+
+resource "aws_iam_role" "realtime" {
+  name               = "${local.name_prefix}-realtime-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
+}
+
+data "aws_iam_policy_document" "realtime_dynamodb" {
+  statement {
+    sid    = "ReadMetrics"
+    effect = "Allow"
+    actions = [
+      "dynamodb:Query",
+      "dynamodb:GetItem",
+    ]
+    resources = [aws_dynamodb_table.realtime.arn]
+  }
+}
+
+resource "aws_iam_policy" "realtime_dynamodb" {
+  name   = "${local.name_prefix}-realtime-dynamodb"
+  policy = data.aws_iam_policy_document.realtime_dynamodb.json
+}
+
+resource "aws_iam_role_policy_attachment" "realtime_dynamodb" {
+  role       = aws_iam_role.realtime.name
+  policy_arn = aws_iam_policy.realtime_dynamodb.arn
+}
+
+data "aws_iam_policy_document" "realtime_ssm" {
+  statement {
+    sid    = "ReadRealtimeParams"
+    effect = "Allow"
+    actions = ["ssm:GetParameter"]
+    resources = [
+      "arn:aws:ssm:${local.region}:${local.account_id}:parameter/cloudpulse/${var.environment}/dynamodb_table",
+    ]
+  }
+}
+
+resource "aws_iam_policy" "realtime_ssm" {
+  name   = "${local.name_prefix}-realtime-ssm"
+  policy = data.aws_iam_policy_document.realtime_ssm.json
+}
+
+resource "aws_iam_role_policy_attachment" "realtime_ssm" {
+  role       = aws_iam_role.realtime.name
+  policy_arn = aws_iam_policy.realtime_ssm.arn
+}
+
+data "aws_iam_policy_document" "realtime_logs" {
+  statement {
+    sid    = "CreateLogGroup"
+    effect = "Allow"
+    actions = ["logs:CreateLogGroup"]
+    resources = ["arn:aws:logs:${local.region}:${local.account_id}:*"]
+  }
+  statement {
+    sid    = "WriteLogs"
+    effect = "Allow"
+    actions = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = [
+      "arn:aws:logs:${local.region}:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-realtime:*",
+    ]
+  }
+}
+
+resource "aws_iam_policy" "realtime_logs" {
+  name   = "${local.name_prefix}-realtime-logs"
+  policy = data.aws_iam_policy_document.realtime_logs.json
+}
+
+resource "aws_iam_role_policy_attachment" "realtime_logs" {
+  role       = aws_iam_role.realtime.name
+  policy_arn = aws_iam_policy.realtime_logs.arn
 }
 
 # ============================================================

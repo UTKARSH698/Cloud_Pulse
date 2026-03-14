@@ -26,3 +26,11 @@ export const fetchEventCount = (token) => fetchQuery(token, "event_count");
 export const fetchTimeseries = (token) => fetchQuery(token, "timeseries");
 export const fetchTopSessions = (token) => fetchQuery(token, "top_sessions");
 export const fetchErrors = (token) => fetchQuery(token, "errors");
+
+export async function fetchRealtime(token) {
+  const res = await fetch(`${CONFIG.apiEndpoint}/realtime`, {
+    headers: { Authorization: token },
+  });
+  if (!res.ok) throw new Error(`realtime failed: ${res.status}`);
+  return res.json();
+}

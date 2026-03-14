@@ -78,6 +78,30 @@ output "query_function_name" {
   value       = aws_lambda_function.query.function_name
 }
 
+output "stream_processor_function_name" {
+  description = "Stream Processor Lambda function name"
+  value       = aws_lambda_function.stream_processor.function_name
+}
+
+output "realtime_function_name" {
+  description = "Realtime Lambda function name"
+  value       = aws_lambda_function.realtime.function_name
+}
+
+# ------------------------------------------------------------
+# Kinesis + DynamoDB (real-time layer)
+# ------------------------------------------------------------
+
+output "kinesis_stream_name" {
+  description = "Kinesis Data Stream name — speed path for real-time analytics"
+  value       = aws_kinesis_stream.events.name
+}
+
+output "dynamodb_table_name" {
+  description = "DynamoDB table name — real-time metrics store"
+  value       = aws_dynamodb_table.realtime.name
+}
+
 # ------------------------------------------------------------
 # Glue + Athena
 # ------------------------------------------------------------

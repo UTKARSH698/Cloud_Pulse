@@ -62,11 +62,12 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
-      - name: Install ingest dependencies
-        run: pip install -r lambdas/ingest/requirements.txt
-
-      - name: Install query dependencies
-        run: pip install -r lambdas/query/requirements.txt
+      - name: Install Lambda dependencies
+        run: |
+          pip install -r lambdas/ingest/requirements.txt
+          pip install -r lambdas/query/requirements.txt
+          pip install -r lambdas/stream_processor/requirements.txt
+          pip install -r lambdas/realtime/requirements.txt
 
       - name: Install test dependencies
         run: pip install pytest pytest-cov
@@ -76,6 +77,8 @@ jobs:
           pytest tests/ \
             --cov=lambdas/ingest \
             --cov=lambdas/query \
+            --cov=lambdas/stream_processor \
+            --cov=lambdas/realtime \
             --cov-report=term-missing \
             --cov-report=xml \
             --cov-fail-under=70 \
@@ -149,8 +152,10 @@ jobs:
       # includes it in the ZIP — must happen before terraform plan
       - name: Install Lambda dependencies into source dirs
         run: |
-          pip install -r lambdas/ingest/requirements.txt -t lambdas/ingest/ --upgrade --quiet
-          pip install -r lambdas/query/requirements.txt  -t lambdas/query/  --upgrade --quiet
+          pip install -r lambdas/ingest/requirements.txt          -t lambdas/ingest/          --upgrade --quiet
+          pip install -r lambdas/query/requirements.txt           -t lambdas/query/           --upgrade --quiet
+          pip install -r lambdas/stream_processor/requirements.txt -t lambdas/stream_processor/ --upgrade --quiet
+          pip install -r lambdas/realtime/requirements.txt        -t lambdas/realtime/        --upgrade --quiet
 
       - name: Create .build directory
         run: mkdir -p .build
@@ -215,8 +220,10 @@ jobs:
 
       - name: Install Lambda dependencies into source dirs
         run: |
-          pip install -r lambdas/ingest/requirements.txt -t lambdas/ingest/ --upgrade --quiet
-          pip install -r lambdas/query/requirements.txt  -t lambdas/query/  --upgrade --quiet
+          pip install -r lambdas/ingest/requirements.txt          -t lambdas/ingest/          --upgrade --quiet
+          pip install -r lambdas/query/requirements.txt           -t lambdas/query/           --upgrade --quiet
+          pip install -r lambdas/stream_processor/requirements.txt -t lambdas/stream_processor/ --upgrade --quiet
+          pip install -r lambdas/realtime/requirements.txt        -t lambdas/realtime/        --upgrade --quiet
 
       - name: Create .build directory
         run: mkdir -p .build
@@ -306,6 +313,15 @@ jobs:
           echo "Batch ingest response status: $STATUS"
           [ "$STATUS" = "200" ] || (echo "Batch smoke test FAILED — expected 200, got $STATUS" && exit 1)
 
+      - name: Smoke test — realtime metrics
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X GET "${{ steps.tf_outputs.outputs.api_endpoint }}/realtime" \
+            -H "Authorization: ${{ steps.auth.outputs.token }}")
+
+          echo "Realtime response status: $STATUS"
+          [ "$STATUS" = "200" ] || (echo "Realtime smoke test FAILED — expected 200, got $STATUS" && exit 1)
+
       - name: Run Glue Crawler (registers new partitions for Athena)
         run: |
           aws glue start-crawler --name "${{ steps.tf_outputs.outputs.crawler_name }}"
@@ -316,5 +332,6 @@ jobs:
           echo "✓ Terraform apply succeeded"
           echo "✓ Ingest single event: 200"
           echo "✓ Ingest batch (2 events): 200"
+          echo "✓ Realtime metrics endpoint: 200"
           echo "✓ Glue Crawler triggered"
           echo "API: ${{ steps.tf_outputs.outputs.api_endpoint }}"
