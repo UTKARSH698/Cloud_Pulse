@@ -6,6 +6,7 @@ import EventCountChart from "./EventCountChart";
 import TimeseriesChart from "./TimeseriesChart";
 import TopSessionsTable from "./TopSessionsTable";
 import ErrorsTable from "./ErrorsTable";
+import LiveMetrics from "./LiveMetrics";
 
 const STAT_COLORS = {
   page_view: "#6366f1",
@@ -80,6 +81,9 @@ export default function Dashboard({ token, onLogout }) {
         <div className="loader">Fetching analytics…</div>
       ) : (
         <main className="content">
+          {/* Real-time streaming metrics */}
+          <LiveMetrics token={token} />
+
           {/* Stat row */}
           <div className="stats-row">
             <StatCard label="Total Events" value={totalEvents.toLocaleString()} color="#6366f1" />

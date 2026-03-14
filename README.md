@@ -1,6 +1,6 @@
-# CloudPulse — Serverless Analytics Platform
+# CloudPulse — Real-Time Serverless Analytics Platform
 
-A production-grade, event-driven analytics pipeline built entirely on AWS serverless services and managed with Terraform. Ingests analytics events via a JWT-secured REST API, stores them in a partitioned S3 data lake, and makes them queryable through Athena SQL — all within the AWS Free Tier.
+A production-grade, **Lambda Architecture** analytics platform (batch + speed layers) built entirely on AWS serverless services and managed with Terraform. Ingests analytics events via a JWT-secured REST API, streams them through Kinesis for real-time metrics, and stores them in a partitioned S3 data lake for historical SQL analytics via Athena — all within the AWS Free Tier.
 
 > **Portfolio context** — Third project in a series exploring AWS serverless patterns.
 > CloudFlow (SAGA / Step Functions) → CSPM (security posture) → **CloudPulse (analytics pipeline)**
@@ -22,37 +22,45 @@ A React + Vite frontend visualises live Athena query results — event counts, t
 ```
 Client (browser / Postman / SDK)
         │
-        │  POST /events          GET /query
+        │  POST /events    GET /query    GET /realtime
         ▼
-┌───────────────────────────────┐
-│      API Gateway (REST)       │  ← Cognito JWT authorizer
-│   throttle: 10 req/s burst 20 │  ← Usage plan guard
-└──────────┬──────────┬─────────┘
-           │          │
-    ┌──────▼──┐  ┌────▼──────┐
-    │ Ingest  │  │  Query    │   Lambda (Python 3.11 + Pydantic v2)
-    │ Lambda  │  │  Lambda   │
-    └──────┬──┘  └────┬──────┘
-           │          │ start_query / poll / get_results
-           │     ┌────▼──────┐
-           │     │  Athena   │   SQL on S3, 100 MB scan limit
-           │     └────┬──────┘
-           │          │ reads schema
-           │     ┌────▼──────┐
-           │     │   Glue    │   Data Catalog (schema + partitions)
-           │     │  Crawler  │   runs every 6 h or on-demand
-           │     └────┬──────┘
-           │          │
-           ▼          ▼
-    ┌──────────────────────────┐
-    │     S3 Data Lake         │   Hive-partitioned JSON
-    │  events/year=YYYY/       │   year / month / day / event_type
-    │    month=MM/day=DD/      │
-    │    event_type=page_view/ │
-    └──────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│             API Gateway (REST v1)                 │
+│    Cognito JWT authorizer · throttle 10/s burst 20│
+└──────┬──────────────────┬──────────────┬──────────┘
+       │                  │              │
+ ┌─────▼──────┐    ┌──────▼──────┐  ┌───▼──────────┐
+ │   Ingest   │    │    Query    │  │   Realtime   │  Lambda (Python 3.11)
+ │   Lambda   │    │   Lambda   │  │    Lambda    │
+ └──┬──────┬──┘    └──────┬──────┘  └───┬──────────┘
+    │      │              │              │
+    │      │ ┌────────────▼──────┐  ┌───▼──────────┐
+    │      │ │      Athena       │  │   DynamoDB   │
+    │      │ │ SQL on S3 · 100MB │  │  real-time   │
+    │      │ │     scan cap      │  │  metrics     │
+    │      │ └────────┬──────────┘  │  (24h TTL)   │
+    │      │          │ schema      └──────▲────────┘
+    │      │ ┌────────▼──────────┐         │ ADD count
+    │      │ │   Glue Crawler    │         │
+    │      │ │  Data Catalog     │  ┌──────┴──────────┐
+    │      │ └────────┬──────────┘  │ Stream Processor│
+    │      │          │             │    Lambda        │
+    │      ▼          ▼             └──────▲────────────┘
+    │  ┌──────────────────────┐            │ GetRecords
+    │  │    S3 Data Lake      │  ┌─────────┴──────────┐
+    │  │  Hive-partitioned    │  │  Kinesis Data Stream│
+    │  │  events/year=.../    │  │  1 shard · 24h ttl │
+    │  │  event_type=.../     │  └────────────────────┘
+    │  └──────────────────────┘         ▲
+    │           ▲                       │ put_record (fail-open)
+    └───────────┴───────────────────────┘
+         S3 write (batch path)   Kinesis put (speed path)
 
-Config: Parameter Store   Monitoring: CloudWatch   IaC: Terraform   CI/CD: GitHub Actions
-Auth:   Cognito User Pool
+── BATCH PATH ──  S3 → Glue → Athena → GET /query   (historical SQL)
+── SPEED PATH ──  Kinesis → Stream Processor → DynamoDB → GET /realtime (< 10 s lag)
+
+Config: SSM Parameter Store  ·  Monitoring: CloudWatch  ·  IaC: Terraform
+Auth: Cognito User Pool      ·  CI/CD: GitHub Actions
 ```
 
 ---
@@ -61,14 +69,17 @@ Auth:   Cognito User Pool
 
 | Service | Role | New vs prior projects |
 |---|---|---|
+| **Kinesis Data Streams** | Speed layer — real-time event streaming (1 shard) | New |
+| **Kinesis Firehose** | Stream → S3 backup delivery | New |
+| **DynamoDB** | Real-time metrics store — per-minute counters with 24h TTL | New |
 | **API Gateway** | REST API, throttling, request validation | New |
 | **Cognito** | JWT auth, hosted sign-in UI, OAuth 2.0 | New |
 | **Glue** | Data Catalog, schema inference, Crawler | New |
 | **Athena** | Serverless SQL on S3 | New |
 | **Parameter Store** | Runtime config for Lambdas | New |
-| Lambda | Ingest + Query functions | Extended |
-| S3 | Data lake + Athena output | Extended |
-| CloudWatch | Alarms, dashboard, access logs | Extended |
+| Lambda | Ingest · Query · Stream Processor · Realtime (4 functions) | Extended |
+| S3 | Data lake + Athena output + stream backup | Extended |
+| CloudWatch | Alarms (Kinesis iterator age, stream errors), dashboard | Extended |
 | IAM | Least-privilege roles per service | Extended |
 | Terraform | All infrastructure as code | Extended |
 | GitHub Actions | CI/CD — test → plan → deploy → smoke test | Extended |
@@ -330,6 +341,17 @@ Tests use mocked boto3 — no AWS credentials needed, runs in < 5 seconds.
 ---
 
 ## Key Design Decisions
+
+### Lambda Architecture (batch + speed layers)
+
+The system implements the classic **Lambda Architecture** pattern:
+
+| Layer | Path | Latency | Use case |
+|---|---|---|---|
+| **Speed** | Kinesis → Stream Processor → DynamoDB | < 10 s | Live dashboard, anomaly detection |
+| **Batch** | S3 → Glue → Athena | minutes | Historical SQL, trend analysis |
+
+The ingest Lambda **dual-writes**: first to S3 (durable), then to Kinesis (fail-open). If Kinesis is unavailable, the event is still persisted in S3 — the real-time dashboard shows stale data but no data is lost.
 
 ### S3 Hive-style partitioning
 

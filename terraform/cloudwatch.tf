@@ -122,6 +122,44 @@ resource "aws_cloudwatch_metric_alarm" "api_5xx" {
 }
 
 # ------------------------------------------------------------
+# Alarms — Stream Processor + Realtime Lambdas
+# ------------------------------------------------------------
+
+resource "aws_cloudwatch_metric_alarm" "stream_processor_errors" {
+  alarm_name          = "${local.name_prefix}-stream-processor-errors"
+  alarm_description   = "Stream Processor Lambda error — Kinesis records may not be aggregated"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.stream_processor.function_name
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "kinesis_iterator_age" {
+  alarm_name          = "${local.name_prefix}-kinesis-iterator-age"
+  alarm_description   = "Kinesis consumer is falling behind — stream processor may be throttled"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "GetRecords.IteratorAgeMilliseconds"
+  namespace           = "AWS/Kinesis"
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = 60000   # 60 seconds behind is concerning
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    StreamName = aws_kinesis_stream.events.name
+  }
+}
+
+# ------------------------------------------------------------
 # CloudWatch Dashboard
 # ------------------------------------------------------------
 

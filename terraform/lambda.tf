@@ -47,6 +47,20 @@ data "archive_file" "query" {
   ]
 }
 
+data "archive_file" "stream_processor" {
+  type        = "zip"
+  source_dir  = "${path.root}/../lambdas/stream_processor"
+  output_path = "${path.root}/../.build/stream_processor.zip"
+  excludes    = ["__pycache__", "*.pyc", "*.pyo", "requirements.txt"]
+}
+
+data "archive_file" "realtime" {
+  type        = "zip"
+  source_dir  = "${path.root}/../lambdas/realtime"
+  output_path = "${path.root}/../.build/realtime.zip"
+  excludes    = ["__pycache__", "*.pyc", "*.pyo", "requirements.txt"]
+}
+
 # ------------------------------------------------------------
 # CloudWatch Log Groups — created before the Lambdas so
 # Terraform controls retention (otherwise Lambda auto-creates
@@ -60,6 +74,16 @@ resource "aws_cloudwatch_log_group" "ingest" {
 
 resource "aws_cloudwatch_log_group" "query" {
   name              = "/aws/lambda/${local.name_prefix}-query"
+  retention_in_days = var.log_retention_days
+}
+
+resource "aws_cloudwatch_log_group" "stream_processor" {
+  name              = "/aws/lambda/${local.name_prefix}-stream-processor"
+  retention_in_days = var.log_retention_days
+}
+
+resource "aws_cloudwatch_log_group" "realtime" {
+  name              = "/aws/lambda/${local.name_prefix}-realtime"
   retention_in_days = var.log_retention_days
 }
 
@@ -98,6 +122,7 @@ resource "aws_lambda_function" "ingest" {
     aws_iam_role_policy_attachment.ingest_logs,
     aws_iam_role_policy_attachment.ingest_s3,
     aws_iam_role_policy_attachment.ingest_ssm,
+    aws_iam_role_policy_attachment.ingest_kinesis,
   ]
 }
 
@@ -141,6 +166,103 @@ resource "aws_lambda_function" "query" {
 # ------------------------------------------------------------
 # Lambda aliases — "live" alias always points to $LATEST
 # API Gateway targets the alias so future version pinning is easy
+# ------------------------------------------------------------
+
+# ------------------------------------------------------------
+# Stream Processor Lambda — Kinesis consumer
+# ------------------------------------------------------------
+
+resource "aws_lambda_function" "stream_processor" {
+  function_name = "${local.name_prefix}-stream-processor"
+  description   = "CloudPulse — aggregates Kinesis stream records into DynamoDB real-time metrics"
+
+  filename         = data.archive_file.stream_processor.output_path
+  source_code_hash = data.archive_file.stream_processor.output_base64sha256
+
+  runtime = var.lambda_runtime
+  handler = "handler.handler"
+
+  role        = aws_iam_role.stream_processor.arn
+  timeout     = 60
+  memory_size = var.lambda_memory_mb
+
+  environment {
+    variables = {
+      ENVIRONMENT = var.environment
+      LOG_LEVEL   = var.environment == "prod" ? "WARNING" : "INFO"
+    }
+  }
+
+  depends_on = [
+    aws_cloudwatch_log_group.stream_processor,
+    aws_iam_role_policy_attachment.stream_processor_kinesis,
+    aws_iam_role_policy_attachment.stream_processor_dynamodb,
+    aws_iam_role_policy_attachment.stream_processor_ssm,
+    aws_iam_role_policy_attachment.stream_processor_logs,
+  ]
+}
+
+# Kinesis → Lambda event source mapping
+# bisect_on_function_error=true: if batch fails, split in half to isolate bad records
+resource "aws_lambda_event_source_mapping" "kinesis_stream_processor" {
+  event_source_arn                   = aws_kinesis_stream.events.arn
+  function_name                      = aws_lambda_function.stream_processor.function_name
+  starting_position                  = "LATEST"
+  batch_size                         = 100
+  maximum_batching_window_in_seconds = 5   # collect up to 5 s of records before invoking
+  bisect_batch_on_function_error     = true
+}
+
+# ------------------------------------------------------------
+# Realtime Lambda — serves GET /realtime from API Gateway
+# ------------------------------------------------------------
+
+resource "aws_lambda_function" "realtime" {
+  function_name = "${local.name_prefix}-realtime"
+  description   = "CloudPulse — reads real-time metrics from DynamoDB for the dashboard"
+
+  filename         = data.archive_file.realtime.output_path
+  source_code_hash = data.archive_file.realtime.output_base64sha256
+
+  runtime = var.lambda_runtime
+  handler = "handler.handler"
+
+  role        = aws_iam_role.realtime.arn
+  timeout     = 10
+  memory_size = var.lambda_memory_mb
+
+  environment {
+    variables = {
+      ENVIRONMENT = var.environment
+      LOG_LEVEL   = var.environment == "prod" ? "WARNING" : "INFO"
+    }
+  }
+
+  depends_on = [
+    aws_cloudwatch_log_group.realtime,
+    aws_iam_role_policy_attachment.realtime_dynamodb,
+    aws_iam_role_policy_attachment.realtime_ssm,
+    aws_iam_role_policy_attachment.realtime_logs,
+  ]
+}
+
+resource "aws_lambda_alias" "realtime_live" {
+  name             = "live"
+  function_name    = aws_lambda_function.realtime.function_name
+  function_version = "$LATEST"
+}
+
+resource "aws_lambda_permission" "realtime_apigw" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.realtime.function_name
+  qualifier     = aws_lambda_alias.realtime_live.name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_api_gateway_rest_api.cloudpulse.execution_arn}/*/*"
+}
+
+# ------------------------------------------------------------
+# Lambda aliases — "live" alias always points to $LATEST
 # ------------------------------------------------------------
 
 resource "aws_lambda_alias" "ingest_live" {
