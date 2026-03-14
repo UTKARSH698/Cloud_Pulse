@@ -78,6 +78,7 @@ jobs:
             --cov=lambdas/query \
             --cov-report=term-missing \
             --cov-report=xml \
+            --cov-fail-under=70 \
             -v
 
       - name: Upload coverage report

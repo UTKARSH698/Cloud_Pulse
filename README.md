@@ -343,6 +343,14 @@ Glue auto-discovers partitions from folder names. Athena's partition pruning ski
 
 Athena is serverless SQL directly on S3 — no cluster to manage, no idle cost. The 100 MB per-query scan limit (`athena_bytes_scanned_cutoff`) caps worst-case cost at ~$0.0005 per query.
 
+**Why not Redshift?** Redshift requires a running cluster (~$0.25/hr minimum), making it ~$180/month at idle. Athena charges only for bytes scanned — a read-heavy analytics workload with Hive partitioning keeps scans small enough that Athena is orders of magnitude cheaper for demo/low-traffic use.
+
+**Why not Elasticsearch/OpenSearch?** OpenSearch is optimized for log search and full-text queries. This project's workload is structured aggregate SQL (GROUP BY event_type, daily counts, session ranking). Athena + Glue Catalog is the natural fit — no index mapping to manage, no cluster sizing.
+
+### Glue Crawler vs manual partition registration
+
+Glue Crawler auto-discovers new S3 partition prefixes and registers them in the Glue Data Catalog. The alternative — calling `ALTER TABLE ADD PARTITION` after every ingest — would require the ingest Lambda to also have Glue write permissions, coupling two services. The crawler runs on-demand (or on a schedule) and keeps the catalog in sync without touching the ingest path.
+
 ### Parameter Store over Lambda env vars
 
 Lambda environment variables are visible to anyone with `GetFunctionConfiguration`. SSM Parameter Store values are encrypted and access-controlled by IAM separately from the function config. Config changes take effect on the next Lambda cold start without redeployment.
