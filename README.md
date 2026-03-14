@@ -7,6 +7,16 @@ A production-grade, event-driven analytics pipeline built entirely on AWS server
 
 ---
 
+## Dashboard
+
+![CloudPulse Login](demo/login.png)
+
+![CloudPulse Dashboard](demo/dashboard.png)
+
+A React + Vite frontend visualises live Athena query results — event counts, timeseries, top sessions, and recent errors — all authenticated via Cognito.
+
+---
+
 ## Architecture
 
 ```
@@ -95,9 +105,24 @@ cloudpulse/
 │   ├── conftest.py          # Shared fixtures, mocked boto3
 │   ├── test_ingest.py       # 20 tests — happy path, validation, S3 failures
 │   └── test_query.py        # 25 tests — all query types, Athena failures
+├── frontend/                # React + Vite dashboard
+│   ├── src/
+│   │   ├── App.jsx          # Root — auth gate
+│   │   ├── auth.js          # Cognito login / token storage
+│   │   ├── api.js           # Fetch wrappers for all 4 query types
+│   │   ├── config.js        # API endpoint + Cognito config
+│   │   └── components/
+│   │       ├── Login.jsx
+│   │       ├── Dashboard.jsx
+│   │       ├── StatCard.jsx
+│   │       ├── EventCountChart.jsx
+│   │       ├── TimeseriesChart.jsx
+│   │       ├── TopSessionsTable.jsx
+│   │       └── ErrorsTable.jsx
+│   └── vite.config.js
 ├── scripts/
 │   └── seed_events.py       # Generates + POSTs realistic sample events
-├── demo/                    # GIF demos (added after deployment)
+├── demo/                    # Screenshots and GIF demos
 └── .github/workflows/
     └── deploy.yml           # test → plan → apply → smoke test
 ```
@@ -282,6 +307,15 @@ curl "$API/query?query_type=event_count&date_from=$(date +%Y-%m-%d -d '7 days ag
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 ```
 
+### 9 — Run the dashboard (optional)
+
+```bash
+cd frontend
+npm install
+npm run dev
+# Open http://localhost:5173 and sign in with your Cognito credentials
+```
+
 ---
 
 ## Running Tests
@@ -347,14 +381,12 @@ Authentication is enforced entirely at API Gateway — no auth code in the Lambd
 
 ## Demo
 
-*Screenshots and GIFs added after live deployment.*
-
 | Demo | Shows |
 |---|---|
+| `demo/dashboard.png` | React dashboard — live Athena query results |
 | `demo-01-ingest.gif` | POST /events → 200, event in S3 |
 | `demo-02-batch.gif` | POST /events/batch → accepted/rejected counts |
 | `demo-03-query.gif` | GET /query → Athena results in < 2 s |
-| `demo-04-dashboard.gif` | CloudWatch dashboard — Lambda metrics live |
 
 ---
 
