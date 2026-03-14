@@ -135,7 +135,10 @@ resource "aws_cloudwatch_dashboard" "cloudpulse" {
 
       {
         type   = "metric"
-        x      = 0; y = 0; width = 8; height = 6
+        x      = 0
+        y      = 0
+        width  = 8
+        height = 6
         properties = {
           title  = "Ingest — Invocations & Errors"
           region = local.region
@@ -150,7 +153,10 @@ resource "aws_cloudwatch_dashboard" "cloudpulse" {
 
       {
         type   = "metric"
-        x      = 8; y = 0; width = 8; height = 6
+        x      = 8
+        y      = 0
+        width  = 8
+        height = 6
         properties = {
           title  = "Ingest — Duration (ms)"
           region = local.region
@@ -165,7 +171,10 @@ resource "aws_cloudwatch_dashboard" "cloudpulse" {
 
       {
         type   = "metric"
-        x      = 16; y = 0; width = 8; height = 6
+        x      = 16
+        y      = 0
+        width  = 8
+        height = 6
         properties = {
           title  = "Ingest — Throttles"
           region = local.region
@@ -181,7 +190,10 @@ resource "aws_cloudwatch_dashboard" "cloudpulse" {
 
       {
         type   = "metric"
-        x      = 0; y = 6; width = 8; height = 6
+        x      = 0
+        y      = 6
+        width  = 8
+        height = 6
         properties = {
           title  = "Query — Invocations & Errors"
           region = local.region
@@ -196,7 +208,10 @@ resource "aws_cloudwatch_dashboard" "cloudpulse" {
 
       {
         type   = "metric"
-        x      = 8; y = 6; width = 8; height = 6
+        x      = 8
+        y      = 6
+        width  = 8
+        height = 6
         properties = {
           title  = "Query — Duration p50 / p99 (ms)"
           region = local.region
@@ -214,7 +229,10 @@ resource "aws_cloudwatch_dashboard" "cloudpulse" {
 
       {
         type   = "metric"
-        x      = 0; y = 12; width = 8; height = 6
+        x      = 0
+        y      = 12
+        width  = 8
+        height = 6
         properties = {
           title  = "API Gateway — Request Count"
           region = local.region
@@ -228,7 +246,10 @@ resource "aws_cloudwatch_dashboard" "cloudpulse" {
 
       {
         type   = "metric"
-        x      = 8; y = 12; width = 8; height = 6
+        x      = 8
+        y      = 12
+        width  = 8
+        height = 6
         properties = {
           title  = "API Gateway — Latency p50 / p99 (ms)"
           region = local.region
@@ -243,7 +264,10 @@ resource "aws_cloudwatch_dashboard" "cloudpulse" {
 
       {
         type   = "metric"
-        x      = 16; y = 12; width = 8; height = 6
+        x      = 16
+        y      = 12
+        width  = 8
+        height = 6
         properties = {
           title  = "API Gateway — 4xx / 5xx Errors"
           region = local.region
@@ -260,7 +284,10 @@ resource "aws_cloudwatch_dashboard" "cloudpulse" {
 
       {
         type   = "metric"
-        x      = 0; y = 18; width = 12; height = 6
+        x      = 0
+        y      = 18
+        width  = 12
+        height = 6
         properties = {
           title  = "Athena — Bytes Scanned per Query (cost awareness)"
           region = local.region
@@ -275,7 +302,10 @@ resource "aws_cloudwatch_dashboard" "cloudpulse" {
 
       {
         type   = "metric"
-        x      = 12; y = 18; width = 12; height = 6
+        x      = 12
+        y      = 18
+        width  = 12
+        height = 6
         properties = {
           title  = "Athena — Query Execution Time (ms)"
           region = local.region

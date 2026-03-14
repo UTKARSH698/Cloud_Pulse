@@ -303,6 +303,7 @@ resource "aws_api_gateway_deployment" "cloudpulse" {
       aws_api_gateway_integration.events_post.id,
       aws_api_gateway_integration.events_batch_post.id,
       aws_api_gateway_integration.query_get.id,
+      aws_api_gateway_authorizer.cognito.id,
     ]))
   }
 

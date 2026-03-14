@@ -250,7 +250,7 @@ def post_batch(api_url: str, token: str, events: list[dict]) -> tuple[int, dict]
         url=f"{api_url.rstrip('/')}/events/batch",
         data=payload,
         headers={
-            "Authorization":  f"Bearer {token}",
+            "Authorization":  token,
             "Content-Type":   "application/json",
         },
         method="POST",

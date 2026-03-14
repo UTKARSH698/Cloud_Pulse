@@ -152,10 +152,6 @@ resource "aws_glue_catalog_table" "events" {
       type = "string"
     }
     columns {
-      name = "event_type"
-      type = "string"
-    }
-    columns {
       name = "timestamp"
       type = "string"   # stored as ISO-8601 string; cast in SQL when needed
     }
