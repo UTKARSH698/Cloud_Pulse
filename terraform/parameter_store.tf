@@ -34,18 +34,23 @@
 
 resource "aws_ssm_parameter" "s3_bucket" {
   name        = "/cloudpulse/${var.environment}/s3_bucket"
-  description = "S3 data lake bucket name — read by the ingest Lambda"
+  description = "S3 data lake bucket name — read by the Worker Lambda"
   type        = "String"
   value       = aws_s3_bucket.data_lake.bucket
-
-  # Tags inherited from provider default_tags (see main.tf)
 }
 
 resource "aws_ssm_parameter" "s3_prefix" {
   name        = "/cloudpulse/${var.environment}/s3_prefix"
-  description = "Top-level S3 key prefix for raw events (e.g. 'events')"
+  description = "Top-level S3 key prefix for raw events (e.g. 'events') — used by ingest to build s3_key"
   type        = "String"
   value       = var.s3_event_prefix
+}
+
+resource "aws_ssm_parameter" "sqs_queue_url" {
+  name        = "/cloudpulse/${var.environment}/sqs_queue_url"
+  description = "SQS events queue URL — read by the Ingest Lambda to enqueue events"
+  type        = "String"
+  value       = aws_sqs_queue.events.url
 }
 
 resource "aws_ssm_parameter" "kinesis_stream" {

@@ -61,6 +61,13 @@ data "archive_file" "realtime" {
   excludes    = ["__pycache__", "*.pyc", "*.pyo", "requirements.txt"]
 }
 
+data "archive_file" "worker" {
+  type        = "zip"
+  source_dir  = "${path.root}/../lambdas/worker"
+  output_path = "${path.root}/../.build/worker.zip"
+  excludes    = ["__pycache__", "*.pyc", "*.pyo", "requirements.txt"]
+}
+
 # ------------------------------------------------------------
 # CloudWatch Log Groups — created before the Lambdas so
 # Terraform controls retention (otherwise Lambda auto-creates
@@ -87,13 +94,18 @@ resource "aws_cloudwatch_log_group" "realtime" {
   retention_in_days = var.log_retention_days
 }
 
+resource "aws_cloudwatch_log_group" "worker" {
+  name              = "/aws/lambda/${local.name_prefix}-worker"
+  retention_in_days = var.log_retention_days
+}
+
 # ------------------------------------------------------------
 # Ingest Lambda
 # ------------------------------------------------------------
 
 resource "aws_lambda_function" "ingest" {
   function_name = "${local.name_prefix}-ingest"
-  description   = "CloudPulse — receives analytics events from API Gateway and writes them to S3"
+  description   = "CloudPulse — receives analytics events from API Gateway and enqueues them to SQS"
 
   # Deployment package
   filename         = data.archive_file.ingest.output_path
@@ -120,7 +132,7 @@ resource "aws_lambda_function" "ingest" {
   depends_on = [
     aws_cloudwatch_log_group.ingest,
     aws_iam_role_policy_attachment.ingest_logs,
-    aws_iam_role_policy_attachment.ingest_s3,
+    aws_iam_role_policy_attachment.ingest_sqs,
     aws_iam_role_policy_attachment.ingest_ssm,
     aws_iam_role_policy_attachment.ingest_kinesis,
   ]
@@ -298,4 +310,47 @@ resource "aws_lambda_permission" "query_apigw" {
   qualifier     = aws_lambda_alias.query_live.name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_api_gateway_rest_api.cloudpulse.execution_arn}/*/*"
+}
+
+# ------------------------------------------------------------
+# Worker Lambda — SQS consumer → S3 writer
+# ------------------------------------------------------------
+
+resource "aws_lambda_function" "worker" {
+  function_name = "${local.name_prefix}-worker"
+  description   = "CloudPulse — consumes SQS events queue and persists records to S3 data lake"
+
+  filename         = data.archive_file.worker.output_path
+  source_code_hash = data.archive_file.worker.output_base64sha256
+
+  runtime = var.lambda_runtime
+  handler = "handler.handler"
+
+  role        = aws_iam_role.worker.arn
+  timeout     = 30   # must be <= sqs visibility_timeout_seconds
+  memory_size = var.lambda_memory_mb
+
+  environment {
+    variables = {
+      ENVIRONMENT = var.environment
+      LOG_LEVEL   = var.environment == "prod" ? "WARNING" : "INFO"
+    }
+  }
+
+  depends_on = [
+    aws_cloudwatch_log_group.worker,
+    aws_iam_role_policy_attachment.worker_logs,
+    aws_iam_role_policy_attachment.worker_s3,
+    aws_iam_role_policy_attachment.worker_sqs,
+    aws_iam_role_policy_attachment.worker_ssm,
+  ]
+}
+
+# SQS → Worker Lambda event source mapping
+# batch_size=10 limits blast radius if a batch fails (entire batch is retried)
+resource "aws_lambda_event_source_mapping" "sqs_worker" {
+  event_source_arn = aws_sqs_queue.events.arn
+  function_name    = aws_lambda_function.worker.function_name
+  batch_size       = 10
+  enabled          = true
 }

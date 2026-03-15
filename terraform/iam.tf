@@ -85,30 +85,27 @@ resource "aws_iam_role_policy_attachment" "ingest_logs" {
   policy_arn = aws_iam_policy.ingest_logs.arn
 }
 
-# --- Policy: S3 write (events prefix only) ---
+# --- Policy: SQS SendMessage (events queue only) ---
 
-data "aws_iam_policy_document" "ingest_s3" {
+data "aws_iam_policy_document" "ingest_sqs" {
   statement {
-    sid    = "PutEvents"
+    sid    = "EnqueueEvents"
     effect = "Allow"
     actions = [
-      "s3:PutObject",
+      "sqs:SendMessage",
     ]
-    resources = [
-      # Scoped to the events/ prefix — ingest cannot touch any other prefix
-      "${aws_s3_bucket.data_lake.arn}/${var.s3_event_prefix}/*",
-    ]
+    resources = [aws_sqs_queue.events.arn]
   }
 }
 
-resource "aws_iam_policy" "ingest_s3" {
-  name   = "${local.name_prefix}-ingest-s3"
-  policy = data.aws_iam_policy_document.ingest_s3.json
+resource "aws_iam_policy" "ingest_sqs" {
+  name   = "${local.name_prefix}-ingest-sqs"
+  policy = data.aws_iam_policy_document.ingest_sqs.json
 }
 
-resource "aws_iam_role_policy_attachment" "ingest_s3" {
+resource "aws_iam_role_policy_attachment" "ingest_sqs" {
   role       = aws_iam_role.ingest.name
-  policy_arn = aws_iam_policy.ingest_s3.arn
+  policy_arn = aws_iam_policy.ingest_sqs.arn
 }
 
 # --- Policy: Kinesis PutRecord (speed path dual-write) ---
@@ -145,7 +142,7 @@ data "aws_iam_policy_document" "ingest_ssm" {
       "ssm:GetParameter",
     ]
     resources = [
-      "arn:aws:ssm:${local.region}:${local.account_id}:parameter/cloudpulse/${var.environment}/s3_bucket",
+      "arn:aws:ssm:${local.region}:${local.account_id}:parameter/cloudpulse/${var.environment}/sqs_queue_url",
       "arn:aws:ssm:${local.region}:${local.account_id}:parameter/cloudpulse/${var.environment}/s3_prefix",
       "arn:aws:ssm:${local.region}:${local.account_id}:parameter/cloudpulse/${var.environment}/kinesis_stream",
     ]
@@ -344,6 +341,118 @@ resource "aws_iam_policy" "realtime_logs" {
 resource "aws_iam_role_policy_attachment" "realtime_logs" {
   role       = aws_iam_role.realtime.name
   policy_arn = aws_iam_policy.realtime_logs.arn
+}
+
+# ============================================================
+# WORKER LAMBDA ROLE
+# ============================================================
+
+resource "aws_iam_role" "worker" {
+  name               = "${local.name_prefix}-worker-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
+}
+
+# --- Policy: S3 write (events prefix only) ---
+
+data "aws_iam_policy_document" "worker_s3" {
+  statement {
+    sid    = "PutEvents"
+    effect = "Allow"
+    actions = [
+      "s3:PutObject",
+    ]
+    resources = [
+      "${aws_s3_bucket.data_lake.arn}/${var.s3_event_prefix}/*",
+    ]
+  }
+}
+
+resource "aws_iam_policy" "worker_s3" {
+  name   = "${local.name_prefix}-worker-s3"
+  policy = data.aws_iam_policy_document.worker_s3.json
+}
+
+resource "aws_iam_role_policy_attachment" "worker_s3" {
+  role       = aws_iam_role.worker.name
+  policy_arn = aws_iam_policy.worker_s3.arn
+}
+
+# --- Policy: SQS consume (events queue only) ---
+
+data "aws_iam_policy_document" "worker_sqs" {
+  statement {
+    sid    = "ConsumeEvents"
+    effect = "Allow"
+    actions = [
+      "sqs:ReceiveMessage",
+      "sqs:DeleteMessage",
+      "sqs:GetQueueAttributes",
+      "sqs:ChangeMessageVisibility",
+    ]
+    resources = [aws_sqs_queue.events.arn]
+  }
+}
+
+resource "aws_iam_policy" "worker_sqs" {
+  name   = "${local.name_prefix}-worker-sqs"
+  policy = data.aws_iam_policy_document.worker_sqs.json
+}
+
+resource "aws_iam_role_policy_attachment" "worker_sqs" {
+  role       = aws_iam_role.worker.name
+  policy_arn = aws_iam_policy.worker_sqs.arn
+}
+
+# --- Policy: SSM (s3_bucket only) ---
+
+data "aws_iam_policy_document" "worker_ssm" {
+  statement {
+    sid    = "ReadWorkerParams"
+    effect = "Allow"
+    actions = ["ssm:GetParameter"]
+    resources = [
+      "arn:aws:ssm:${local.region}:${local.account_id}:parameter/cloudpulse/${var.environment}/s3_bucket",
+    ]
+  }
+}
+
+resource "aws_iam_policy" "worker_ssm" {
+  name   = "${local.name_prefix}-worker-ssm"
+  policy = data.aws_iam_policy_document.worker_ssm.json
+}
+
+resource "aws_iam_role_policy_attachment" "worker_ssm" {
+  role       = aws_iam_role.worker.name
+  policy_arn = aws_iam_policy.worker_ssm.arn
+}
+
+# --- Policy: CloudWatch Logs ---
+
+data "aws_iam_policy_document" "worker_logs" {
+  statement {
+    sid    = "CreateLogGroup"
+    effect = "Allow"
+    actions = ["logs:CreateLogGroup"]
+    resources = ["arn:aws:logs:${local.region}:${local.account_id}:*"]
+  }
+  statement {
+    sid    = "WriteLogs"
+    effect = "Allow"
+    actions = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = [
+      "arn:aws:logs:${local.region}:${local.account_id}:log-group:/aws/lambda/${local.name_prefix}-worker:*",
+    ]
+  }
+}
+
+resource "aws_iam_policy" "worker_logs" {
+  name   = "${local.name_prefix}-worker-logs"
+  policy = data.aws_iam_policy_document.worker_logs.json
+}
+
+resource "aws_iam_role_policy_attachment" "worker_logs" {
+  role       = aws_iam_role.worker.name
+  policy_arn = aws_iam_policy.worker_logs.arn
 }
 
 # ============================================================
