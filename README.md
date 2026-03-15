@@ -34,29 +34,33 @@ Client (browser / Postman / SDK)
  │   Lambda   │    │   Lambda   │  │    Lambda    │
  └──┬──────┬──┘    └──────┬──────┘  └───┬──────────┘
     │      │              │              │
-    │      │ ┌────────────▼──────┐  ┌───▼──────────┐
-    │      │ │      Athena       │  │   DynamoDB   │
-    │      │ │ SQL on S3 · 100MB │  │  real-time   │
-    │      │ │     scan cap      │  │  metrics     │
-    │      │ └────────┬──────────┘  │  (24h TTL)   │
-    │      │          │ schema      └──────▲────────┘
-    │      │ ┌────────▼──────────┐         │ ADD count
-    │      │ │   Glue Crawler    │         │
-    │      │ │  Data Catalog     │  ┌──────┴──────────┐
-    │      │ └────────┬──────────┘  │ Stream Processor│
-    │      │          │             │    Lambda        │
-    │      ▼          ▼             └──────▲────────────┘
-    │  ┌──────────────────────┐            │ GetRecords
-    │  │    S3 Data Lake      │  ┌─────────┴──────────┐
-    │  │  Hive-partitioned    │  │  Kinesis Data Stream│
-    │  │  events/year=.../    │  │  1 shard · 24h ttl │
-    │  │  event_type=.../     │  └────────────────────┘
-    │  └──────────────────────┘         ▲
-    │           ▲                       │ put_record (fail-open)
-    └───────────┴───────────────────────┘
-         S3 write (batch path)   Kinesis put (speed path)
+    │      │        ┌─────▼──────┐  ┌───▼──────────┐
+    │      │        │   Athena   │  │   DynamoDB   │
+    │      │        │ SQL on S3  │  │  real-time   │
+    │      │        └─────┬──────┘  │  counters    │
+    │      │              │ schema  │  (24h TTL)   │
+    │      │        ┌─────▼──────┐  └──────▲───────┘
+    │      │        │    Glue    │         │ ADD count
+    │      │        │  Crawler   │  ┌──────┴──────────┐
+    │      │        └─────┬──────┘  │ Stream Processor│
+    │      │              ▼         │    Lambda        │
+    │   ┌──▼────────────────────┐   └──────▲───────────┘
+    │   │    S3 Data Lake       │          │ GetRecords
+    │   │  Hive-partitioned     │   ┌──────┴──────────┐
+    │   │  events/year=.../     │   │ Kinesis Data    │
+    │   │  event_type=.../      │   │ Stream (1 shard)│
+    │   └──────────────────▲────┘   └─────────────────┘
+    │                      │                ▲
+    │               ┌──────┴──────┐         │ put_record (fail-open)
+    │               │   Worker    │         │
+    └──────────────►│   Lambda    ├─────────┘
+      SendMessage   └──────▲──────┘   also puts to Kinesis (speed path)
+      (SQS batch           │
+       path)        ┌──────┴──────┐
+                    │  SQS Queue  │  + DLQ (after 3 failed attempts)
+                    └─────────────┘
 
-── BATCH PATH ──  S3 → Glue → Athena → GET /query   (historical SQL)
+── BATCH PATH ──  SQS → Worker Lambda → S3 → Glue → Athena → GET /query
 ── SPEED PATH ──  Kinesis → Stream Processor → DynamoDB → GET /realtime (< 10 s lag)
 
 Config: SSM Parameter Store  ·  Monitoring: CloudWatch  ·  IaC: Terraform
@@ -69,17 +73,18 @@ Auth: Cognito User Pool      ·  CI/CD: GitHub Actions
 
 | Service | Role | New vs prior projects |
 |---|---|---|
+| **SQS** | Batch path queue — decouples ingest API from S3 writes; DLQ for failed messages | New |
+| **DynamoDB** | Real-time metrics store — per-minute event counters, session tracking, 24h TTL | New |
 | **Kinesis Data Streams** | Speed layer — real-time event streaming (1 shard) | New |
 | **Kinesis Firehose** | Stream → S3 backup delivery | New |
-| **DynamoDB** | Real-time metrics store — per-minute counters with 24h TTL | New |
 | **API Gateway** | REST API, throttling, request validation | New |
 | **Cognito** | JWT auth, hosted sign-in UI, OAuth 2.0 | New |
 | **Glue** | Data Catalog, schema inference, Crawler | New |
 | **Athena** | Serverless SQL on S3 | New |
 | **Parameter Store** | Runtime config for Lambdas | New |
-| Lambda | Ingest · Query · Stream Processor · Realtime (4 functions) | Extended |
+| Lambda | Ingest · Worker · Query · Stream Processor · Realtime (5 functions) | Extended |
 | S3 | Data lake + Athena output + stream backup | Extended |
-| CloudWatch | Alarms (Kinesis iterator age, stream errors), dashboard | Extended |
+| CloudWatch | Alarms (SQS DLQ depth, worker errors, Kinesis iterator age), dashboard | Extended |
 | IAM | Least-privilege roles per service | Extended |
 | Terraform | All infrastructure as code | Extended |
 | GitHub Actions | CI/CD — test → plan → deploy → smoke test | Extended |

@@ -2,7 +2,7 @@
 cloudpulse/lambdas/ingest/handler.py
 
 Ingest Lambda — receives analytics events from API Gateway,
-validates them, and dual-writes each to S3 (batch path) and
+validates them, and enqueues each to SQS (batch path) and
 Kinesis Data Stream (speed path / real-time analytics).
 
 Flow
@@ -10,14 +10,21 @@ Flow
 API Gateway (POST /events or POST /events/batch)
   → Cognito JWT authorizer (handled by API GW, not here)
   → THIS Lambda
-      1. Read S3 bucket / prefix / Kinesis stream from Parameter Store (cached)
+      1. Read SQS queue URL / S3 prefix / Kinesis stream from Parameter Store
       2. Parse & validate JSON body with Pydantic
-      3. Write each event as a single JSON object to S3      (batch path)
+      3. Enqueue each event to SQS                          (batch path)
+         → Worker Lambda consumes SQS and writes to S3
       4. Put each accepted event to Kinesis Data Stream      (speed path)
       5. Return 200 / 207 / 4xx to API Gateway
 
+Why SQS instead of direct S3 write?
+------------------------------------
+Decoupling the S3 write into an async Worker Lambda keeps ingest fast
+(callers see 200 once the message is enqueued) and lets S3 transient
+failures retry silently via SQS — they never surface as 207 responses.
+
 Kinesis is fail-open: if the put_record call fails, the event is still
-accepted (it was already written to S3). The stream failure is logged
+accepted (it was already queued to SQS). The stream failure is logged
 but does not cause a 207 partial-failure response.
 
 Environment variables
@@ -26,7 +33,7 @@ ENVIRONMENT   dev | staging | prod   (set by Terraform, default: dev)
 
 Parameter Store keys (read at runtime)
 ---------------------------------------
-/cloudpulse/{env}/s3_bucket       — target S3 bucket name
+/cloudpulse/{env}/sqs_queue_url   — SQS queue URL for the events queue
 /cloudpulse/{env}/s3_prefix       — S3 key prefix (e.g. "events")
 /cloudpulse/{env}/kinesis_stream  — Kinesis stream name
 """
@@ -56,7 +63,7 @@ logger.setLevel(logging.INFO)
 # AWS clients — module-level so Lambda container reuse keeps them warm
 # ---------------------------------------------------------------------------
 
-_s3      = boto3.client("s3")
+_sqs     = boto3.client("sqs")
 _ssm     = boto3.client("ssm")
 _kinesis = boto3.client("kinesis")
 
@@ -140,26 +147,28 @@ def _put_to_kinesis(event: AnalyticsEvent, stream_name: str) -> None:
         logger.warning(f"Kinesis put_record failed for event_id={event.event_id}: {exc}")
 
 
-def _write_to_s3(event: AnalyticsEvent, bucket: str, prefix: str) -> bool:
+def _put_to_sqs(event: AnalyticsEvent, queue_url: str, s3_prefix: str) -> bool:
     """
-    Write one event to S3.
+    Enqueue one event to SQS for async S3 write by the Worker Lambda.
+
+    The message body carries the pre-computed s3_key (so the Worker does
+    not need to re-derive the Hive partition path) and the flat record
+    dict that will be written verbatim to S3.
 
     Returns True on success, False on any ClientError so the caller can
     track partial failures and return HTTP 207.
     """
-    key    = event.s3_key(prefix=prefix)
+    s3_key = event.s3_key(prefix=s3_prefix)
     record = event.to_s3_record()
     try:
-        _s3.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=json.dumps(record, ensure_ascii=False, default=str),
-            ContentType="application/json",
+        _sqs.send_message(
+            QueueUrl=queue_url,
+            MessageBody=json.dumps({"s3_key": s3_key, "record": record}, default=str),
         )
-        logger.info(f"event_id={event.event_id} written → s3://{bucket}/{key}")
+        logger.info(f"event_id={event.event_id} → SQS (s3_key={s3_key})")
         return True
     except ClientError as exc:
-        logger.error(f"S3 put_object failed for event_id={event.event_id}: {exc}")
+        logger.error(f"SQS send_message failed for event_id={event.event_id}: {exc}")
         return False
 
 
@@ -209,7 +218,7 @@ def handler(event: dict, context: Any) -> dict:
     # ── 1. Resolve config from Parameter Store ────────────────────────────
     env = os.environ.get("ENVIRONMENT", "dev")
     try:
-        s3_bucket      = _get_parameter(f"/cloudpulse/{env}/s3_bucket")
+        sqs_queue_url  = _get_parameter(f"/cloudpulse/{env}/sqs_queue_url")
         s3_prefix      = _get_parameter(f"/cloudpulse/{env}/s3_prefix")
         kinesis_stream = _get_parameter(f"/cloudpulse/{env}/kinesis_stream")
     except ClientError:
@@ -247,19 +256,19 @@ def handler(event: dict, context: Any) -> dict:
                 "details": exc.errors(include_url=False),
             })
 
-    # ── 4. Write events to S3 ─────────────────────────────────────────────
+    # ── 4. Enqueue events to SQS (Worker Lambda → S3) ────────────────────
     accepted_ids: list[str] = []
     errors:       list[dict[str, str]] = []
 
     for evt in events_to_write:
-        if _write_to_s3(evt, s3_bucket, s3_prefix):
+        if _put_to_sqs(evt, sqs_queue_url, s3_prefix):
             accepted_ids.append(str(evt.event_id))
             # Speed path: put to Kinesis for real-time aggregation (fail-open)
             _put_to_kinesis(evt, kinesis_stream)
         else:
             errors.append({
                 "event_id": str(evt.event_id),
-                "reason":   "S3 write failed — see Lambda logs",
+                "reason":   "SQS enqueue failed — see Lambda logs",
             })
 
     # ── 5. Build response ─────────────────────────────────────────────────

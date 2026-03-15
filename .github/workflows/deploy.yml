@@ -68,6 +68,7 @@ jobs:
           pip install -r lambdas/query/requirements.txt
           pip install -r lambdas/stream_processor/requirements.txt
           pip install -r lambdas/realtime/requirements.txt
+          pip install -r lambdas/worker/requirements.txt
 
       - name: Install test dependencies
         run: pip install pytest pytest-cov
@@ -79,6 +80,7 @@ jobs:
             --cov=lambdas/query \
             --cov=lambdas/stream_processor \
             --cov=lambdas/realtime \
+            --cov=lambdas/worker \
             --cov-report=term-missing \
             --cov-report=xml \
             --cov-fail-under=70 \
@@ -156,6 +158,7 @@ jobs:
           pip install -r lambdas/query/requirements.txt           -t lambdas/query/           --upgrade --quiet
           pip install -r lambdas/stream_processor/requirements.txt -t lambdas/stream_processor/ --upgrade --quiet
           pip install -r lambdas/realtime/requirements.txt        -t lambdas/realtime/        --upgrade --quiet
+          pip install -r lambdas/worker/requirements.txt          -t lambdas/worker/          --upgrade --quiet
 
       - name: Create .build directory
         run: mkdir -p .build
@@ -224,6 +227,7 @@ jobs:
           pip install -r lambdas/query/requirements.txt           -t lambdas/query/           --upgrade --quiet
           pip install -r lambdas/stream_processor/requirements.txt -t lambdas/stream_processor/ --upgrade --quiet
           pip install -r lambdas/realtime/requirements.txt        -t lambdas/realtime/        --upgrade --quiet
+          pip install -r lambdas/worker/requirements.txt          -t lambdas/worker/          --upgrade --quiet
 
       - name: Create .build directory
         run: mkdir -p .build

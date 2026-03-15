@@ -88,6 +88,25 @@ output "realtime_function_name" {
   value       = aws_lambda_function.realtime.function_name
 }
 
+output "worker_function_name" {
+  description = "Worker Lambda function name — SQS consumer → S3"
+  value       = aws_lambda_function.worker.function_name
+}
+
+# ------------------------------------------------------------
+# SQS
+# ------------------------------------------------------------
+
+output "sqs_queue_url" {
+  description = "SQS events queue URL — ingest Lambda sends here"
+  value       = aws_sqs_queue.events.url
+}
+
+output "sqs_dlq_url" {
+  description = "SQS dead-letter queue URL — messages land here after 3 failed delivery attempts"
+  value       = aws_sqs_queue.events_dlq.url
+}
+
 # ------------------------------------------------------------
 # Kinesis + DynamoDB (real-time layer)
 # ------------------------------------------------------------

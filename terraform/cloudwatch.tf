@@ -160,6 +160,44 @@ resource "aws_cloudwatch_metric_alarm" "kinesis_iterator_age" {
 }
 
 # ------------------------------------------------------------
+# Alarms — Worker Lambda + SQS DLQ
+# ------------------------------------------------------------
+
+resource "aws_cloudwatch_metric_alarm" "worker_errors" {
+  alarm_name          = "${local.name_prefix}-worker-errors"
+  alarm_description   = "Worker Lambda error — SQS messages may not be landing in S3"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.worker.function_name
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "sqs_dlq_depth" {
+  alarm_name          = "${local.name_prefix}-sqs-dlq-depth"
+  alarm_description   = "SQS DLQ has messages — events failed to land in S3 after 3 retries"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  namespace           = "AWS/SQS"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    QueueName = aws_sqs_queue.events_dlq.name
+  }
+}
+
+# ------------------------------------------------------------
 # CloudWatch Dashboard
 # ------------------------------------------------------------
 
