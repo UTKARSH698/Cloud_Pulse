@@ -22,7 +22,9 @@ Coverage targets:
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import pathlib
 import sys
 import os
 from unittest.mock import MagicMock, patch, call
@@ -30,6 +32,31 @@ from unittest.mock import MagicMock, patch, call
 import pytest
 
 from conftest import SSM_VALUES, make_query_event, mock_ssm, mock_s3
+
+_QUERY_DIR = pathlib.Path(__file__).parent.parent / "lambdas" / "query"
+
+
+def _load_query_handler():
+    """Load query handler + models from their absolute paths."""
+    for key in ["query_handler", "handler", "models"]:
+        sys.modules.pop(key, None)
+
+    # Name the module "models" so pydantic's forward-ref resolution
+    # (which looks up __module__ in sys.modules) finds the right namespace.
+    models_spec = importlib.util.spec_from_file_location(
+        "models", _QUERY_DIR / "models.py"
+    )
+    models_mod = importlib.util.module_from_spec(models_spec)
+    sys.modules["models"] = models_mod
+    models_spec.loader.exec_module(models_mod)
+
+    handler_spec = importlib.util.spec_from_file_location(
+        "query_handler", _QUERY_DIR / "handler.py"
+    )
+    handler_mod = importlib.util.module_from_spec(handler_spec)
+    sys.modules["query_handler"] = handler_mod
+    handler_spec.loader.exec_module(handler_mod)
+    return handler_mod, models_mod
 
 
 # ---------------------------------------------------------------------------
@@ -105,10 +132,6 @@ def _make_athena_mock(
 # ---------------------------------------------------------------------------
 
 def _call_handler(apigw_event: dict, mock_athena, mock_ssm_client):
-    for mod in list(sys.modules.keys()):
-        if mod in ("handler", "models"):
-            del sys.modules[mod]
-
     with patch("boto3.client") as mock_boto3:
         def client_factory(service, **kwargs):
             if service == "athena":
@@ -118,8 +141,8 @@ def _call_handler(apigw_event: dict, mock_athena, mock_ssm_client):
             return MagicMock()
 
         mock_boto3.side_effect = client_factory
-        import handler as query_handler
-        return query_handler.handler(apigw_event, context=None)
+        handler_mod, _ = _load_query_handler()
+        return handler_mod.handler(apigw_event, context=None)
 
 
 # ---------------------------------------------------------------------------
@@ -242,10 +265,6 @@ class TestSQLPartitionFilter:
     }
 
     def _capture_sql(self, params: dict, mock_ssm_client) -> str:
-        for mod in list(sys.modules.keys()):
-            if mod in ("handler", "models"):
-                del sys.modules[mod]
-
         captured = {}
 
         def fake_start(**kwargs):
@@ -379,8 +398,16 @@ class TestAthenaFailures:
 
 class TestQueryRequestModel:
 
-    def test_valid_request_parses(self):
-        from models import QueryRequest, QueryType
+    @pytest.fixture(autouse=True)
+    def _query_models(self):
+        """Pin sys.modules['models'] to lambdas/query/models.py for this class."""
+        _, models_mod = _load_query_handler()
+        yield models_mod
+        sys.modules.pop("models", None)
+
+    def test_valid_request_parses(self, _query_models):
+        QueryRequest = _query_models.QueryRequest
+        QueryType    = _query_models.QueryType
         req = QueryRequest.model_validate({
             "query_type": "event_count",
             "date_from":  "2026-03-01",
@@ -388,8 +415,8 @@ class TestQueryRequestModel:
         })
         assert req.query_type == QueryType.EVENT_COUNT
 
-    def test_default_limit_is_100(self):
-        from models import QueryRequest
+    def test_default_limit_is_100(self, _query_models):
+        QueryRequest = _query_models.QueryRequest
         req = QueryRequest.model_validate({
             "query_type": "top_sessions",
             "date_from":  "2026-03-01",
@@ -397,8 +424,8 @@ class TestQueryRequestModel:
         })
         assert req.limit == 100
 
-    def test_same_day_range_valid(self):
-        from models import QueryRequest
+    def test_same_day_range_valid(self, _query_models):
+        QueryRequest = _query_models.QueryRequest
         req = QueryRequest.model_validate({
             "query_type": "errors",
             "date_from":  "2026-03-09",

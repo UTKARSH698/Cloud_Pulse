@@ -92,6 +92,9 @@ SSM_VALUES = {
     "/cloudpulse/dev/athena_output_bucket": "cloudpulse-dev-athena-output",
     "/cloudpulse/dev/glue_database":       "cloudpulse_dev",
     "/cloudpulse/dev/glue_table":          "events",
+    "/cloudpulse/dev/sqs_queue_url":       "https://sqs.us-east-1.amazonaws.com/123456789012/cloudpulse-dev-events",
+    "/cloudpulse/dev/kinesis_stream":      "cloudpulse-dev-events",
+    "/cloudpulse/dev/dynamodb_table":      "cloudpulse-dev-metrics",
 }
 
 
@@ -110,4 +113,12 @@ def mock_s3():
     """Patch boto3 S3 client; put_object succeeds by default."""
     mock = MagicMock()
     mock.put_object.return_value = {"ResponseMetadata": {"HTTPStatusCode": 200}}
+    return mock
+
+
+@pytest.fixture
+def mock_sqs():
+    """Patch boto3 SQS client; send_message succeeds by default."""
+    mock = MagicMock()
+    mock.send_message.return_value = {"MessageId": "test-message-id"}
     return mock
