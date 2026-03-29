@@ -1,6 +1,14 @@
 # CloudPulse — Real-Time Serverless Analytics Platform
 
-A production-grade, **Lambda Architecture** analytics platform (batch + speed layers) built entirely on AWS serverless services and managed with Terraform. Ingests analytics events via a JWT-secured REST API, streams them through Kinesis for real-time metrics, and stores them in a partitioned S3 data lake for historical SQL analytics via Athena — all within the AWS Free Tier.
+![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
+![Terraform](https://img.shields.io/badge/Terraform-1.7-623CE4?logo=terraform&logoColor=white)
+![AWS](https://img.shields.io/badge/AWS-Serverless-FF9900?logo=amazonaws&logoColor=white)
+![CI](https://img.shields.io/github/actions/workflow/status/UTKARSH698/CloudPulse/deploy.yml?label=CI%2FCD)
+![License](https://img.shields.io/badge/License-MIT-green)
+
+A production-grade **Lambda Architecture** analytics platform (batch + speed layers) built entirely on AWS serverless services and managed with Terraform. Ingests analytics events via a JWT-secured REST API, streams them through Kinesis for real-time metrics, and stores them in a partitioned S3 data lake for historical SQL analytics via Athena — all within the AWS Free Tier.
+
+**Key numbers:** 1 000 events/batch · ~55 ms p50 ingest · < 10 s real-time lag · ~1.8 s Athena query · 5 Lambda functions · 15 Terraform files · ~$0 to run
 
 > **Portfolio context** — Third project in a series exploring AWS serverless patterns.
 > CloudFlow (SAGA / Step Functions) → CSPM (security posture) → **CloudPulse (analytics pipeline)**
@@ -13,7 +21,7 @@ A production-grade, **Lambda Architecture** analytics platform (batch + speed la
 
 ![CloudPulse Dashboard](demo/dashboard.png)
 
-A React + Vite frontend visualises live Athena query results — event counts, timeseries, top sessions, and recent errors — all authenticated via Cognito.
+A React + Vite frontend visualises live Athena query results and real-time DynamoDB metrics — event counts, timeseries, top sessions, and recent errors — all authenticated via Cognito.
 
 ---
 
@@ -120,7 +128,7 @@ Measured against a single-shard dev deployment (`t3.micro`-equivalent Lambda, `u
 | CloudWatch | Alarms (SQS DLQ depth, worker errors, Kinesis iterator age), dashboard | Extended |
 | IAM | Least-privilege roles per service | Extended |
 | Terraform | All infrastructure as code | Extended |
-| GitHub Actions | CI/CD — test → plan → deploy → smoke test | Extended |
+| GitHub Actions | CI/CD — test → frontend-test → plan → deploy → smoke test | Extended |
 
 ---
 
@@ -130,36 +138,51 @@ Measured against a single-shard dev deployment (`t3.micro`-equivalent Lambda, `u
 cloudpulse/
 ├── lambdas/
 │   ├── ingest/
-│   │   ├── handler.py       # Lambda entry point
-│   │   ├── models.py        # Pydantic event schema + S3 key logic
+│   │   ├── handler.py            # Validate + dual-write (SQS + Kinesis)
+│   │   ├── models.py             # Pydantic event schema + S3 key logic
+│   │   └── requirements.txt
+│   ├── worker/
+│   │   ├── handler.py            # SQS consumer — writes events to S3
+│   │   └── requirements.txt
+│   ├── stream_processor/
+│   │   ├── handler.py            # Kinesis consumer — atomic DynamoDB counters
+│   │   └── requirements.txt
+│   ├── realtime/
+│   │   ├── handler.py            # DynamoDB query — last-5-min metrics
 │   │   └── requirements.txt
 │   └── query/
-│       ├── handler.py       # Athena poll + result fetch
-│       ├── models.py        # QueryRequest / QueryResponse models
+│       ├── handler.py            # Athena poll + result fetch
+│       ├── models.py             # QueryRequest / QueryResponse models
 │       └── requirements.txt
 ├── terraform/
-│   ├── main.tf              # Provider, backend, locals
-│   ├── variables.tf         # All tuneable inputs with validation
-│   ├── s3.tf                # Data lake + Athena output buckets
-│   ├── iam.tf               # Least-privilege roles (3 roles, 8 policies)
-│   ├── lambda.tf            # Package + deploy both functions
-│   ├── api_gateway.tf       # REST API, Cognito authorizer, CORS
-│   ├── cognito.tf           # User Pool, App Client, hosted UI domain
-│   ├── glue.tf              # Database, pre-seeded table, Crawler
-│   ├── athena.tf            # Workgroup + 5 named queries
-│   ├── parameter_store.tf   # 9 SSM parameters
-│   ├── cloudwatch.tf        # 5 alarms + 8-widget dashboard
-│   └── outputs.tf           # API URL, quick-start guide
+│   ├── main.tf                   # Provider, backend, locals
+│   ├── variables.tf              # All tuneable inputs with validation
+│   ├── s3.tf                     # Data lake + Athena output buckets
+│   ├── iam.tf                    # Least-privilege roles (3 roles, 8 policies)
+│   ├── lambda.tf                 # Package + deploy all 5 functions
+│   ├── api_gateway.tf            # REST API, Cognito authorizer, CORS
+│   ├── cognito.tf                # User Pool, App Client, hosted UI domain
+│   ├── sqs.tf                    # Events queue + DLQ
+│   ├── kinesis.tf                # Data stream (1 shard)
+│   ├── dynamodb.tf               # Real-time counters table (24h TTL)
+│   ├── glue.tf                   # Database, pre-seeded table, Crawler
+│   ├── athena.tf                 # Workgroup + 5 named queries
+│   ├── parameter_store.tf        # 9 SSM parameters
+│   ├── cloudwatch.tf             # 5 alarms + 8-widget dashboard
+│   └── outputs.tf                # API URL, quick-start guide
 ├── tests/
-│   ├── conftest.py          # Shared fixtures, mocked boto3
-│   ├── test_ingest.py       # 20 tests — happy path, validation, S3 failures
-│   └── test_query.py        # 25 tests — all query types, Athena failures
-├── frontend/                # React + Vite dashboard
+│   ├── conftest.py               # Shared fixtures, mocked boto3
+│   ├── test_ingest.py            # 20 tests — happy path, validation, failures
+│   ├── test_worker.py            # SQS batch processing, S3 write, DLQ
+│   ├── test_stream_processor.py  # Kinesis records, DynamoDB counter updates
+│   ├── test_realtime.py          # DynamoDB query, window logic
+│   └── test_query.py             # 25 tests — all query types, Athena failures
+├── frontend/                     # React + Vite dashboard
 │   ├── src/
-│   │   ├── App.jsx          # Root — auth gate
-│   │   ├── auth.js          # Cognito login / token storage
-│   │   ├── api.js           # Fetch wrappers for all 4 query types
-│   │   ├── config.js        # API endpoint + Cognito config
+│   │   ├── App.jsx               # Root — auth gate
+│   │   ├── auth.js               # Cognito login / token storage
+│   │   ├── api.js                # Fetch wrappers for all 4 query types
+│   │   ├── config.js             # API endpoint + Cognito config
 │   │   └── components/
 │   │       ├── Login.jsx
 │   │       ├── Dashboard.jsx
@@ -170,10 +193,10 @@ cloudpulse/
 │   │       └── ErrorsTable.jsx
 │   └── vite.config.js
 ├── scripts/
-│   └── seed_events.py       # Generates + POSTs realistic sample events
-├── demo/                    # Screenshots and GIF demos
+│   └── seed_events.py            # Generates + POSTs realistic sample events
+├── demo/                         # Screenshots
 └── .github/workflows/
-    └── deploy.yml           # test → plan → apply → smoke test
+    └── deploy.yml                # test → frontend-test → plan → apply → smoke test
 ```
 
 ---
@@ -252,6 +275,14 @@ curl ".../query?query_type=event_count&date_from=2026-03-01&date_to=2026-03-09" 
 }
 ```
 
+### GET `/realtime` — last 5 minutes of metrics
+
+```bash
+curl ".../realtime" -H "Authorization: Bearer $TOKEN"
+```
+
+Returns pre-aggregated per-minute counters from DynamoDB — no Athena involved, p50 ~12 ms.
+
 **Event schema**
 
 | Field | Type | Required | Notes |
@@ -274,6 +305,7 @@ curl ".../query?query_type=event_count&date_from=2026-03-01&date_to=2026-03-09" 
 - AWS CLI configured (`aws configure`)
 - Terraform ≥ 1.6
 - Python 3.11
+- Node 20 (optional — frontend only)
 
 ### 1 — Clone and set up
 
@@ -285,8 +317,11 @@ cd CloudPulse
 ### 2 — Install Lambda dependencies
 
 ```bash
-pip install -r lambdas/ingest/requirements.txt -t lambdas/ingest/
-pip install -r lambdas/query/requirements.txt  -t lambdas/query/
+pip install -r lambdas/ingest/requirements.txt          -t lambdas/ingest/
+pip install -r lambdas/query/requirements.txt           -t lambdas/query/
+pip install -r lambdas/worker/requirements.txt          -t lambdas/worker/
+pip install -r lambdas/stream_processor/requirements.txt -t lambdas/stream_processor/
+pip install -r lambdas/realtime/requirements.txt        -t lambdas/realtime/
 mkdir -p .build
 ```
 
@@ -371,10 +406,42 @@ npm run dev
 
 ```bash
 pip install pytest pytest-cov
-pytest tests/ -v --cov=lambdas/ingest --cov=lambdas/query --cov-report=term-missing
+pytest tests/ -v \
+  --cov=lambdas/ingest \
+  --cov=lambdas/query \
+  --cov=lambdas/worker \
+  --cov=lambdas/stream_processor \
+  --cov=lambdas/realtime \
+  --cov-report=term-missing
 ```
 
 Tests use mocked boto3 — no AWS credentials needed, runs in < 5 seconds.
+
+---
+
+## CI/CD Pipeline
+
+The GitHub Actions pipeline ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)) runs on every push to `main` and every pull request.
+
+```
+push to main / PR
+        │
+        ├── test          — pytest all 5 lambdas, coverage ≥ 70%
+        ├── frontend-test — Vitest + coverage
+        │
+        └── plan          — terraform init + validate + plan (all branches)
+                │
+                └── deploy (main branch only)
+                        ├── terraform apply
+                        ├── smoke test: POST /events → 200
+                        ├── smoke test: POST /events/batch → 200
+                        ├── smoke test: GET /realtime → 200
+                        └── start Glue Crawler
+```
+
+**Secrets required:** `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`
+
+Manual deploys via `workflow_dispatch` support `dev`, `staging`, and `prod` environment targets with GitHub environment approval gates.
 
 ---
 
@@ -389,7 +456,7 @@ The system implements the classic **Lambda Architecture** pattern:
 | **Speed** | Kinesis → Stream Processor → DynamoDB | < 10 s | Live dashboard, anomaly detection |
 | **Batch** | S3 → Glue → Athena | minutes | Historical SQL, trend analysis |
 
-The ingest Lambda **dual-writes**: first to S3 (durable), then to Kinesis (fail-open). If Kinesis is unavailable, the event is still persisted in S3 — the real-time dashboard shows stale data but no data is lost.
+The ingest Lambda **dual-writes**: first to SQS (durable, batch), then to Kinesis (fail-open, speed). If Kinesis is unavailable, the event is still persisted via the SQS → Worker → S3 path — the real-time dashboard shows stale data but no data is lost.
 
 ### S3 Hive-style partitioning
 
@@ -447,14 +514,20 @@ Authentication is enforced entirely at API Gateway — no auth code in the Lambd
 
 ---
 
-## Demo
+## Teardown
 
-| Demo | Shows |
-|---|---|
-| `demo/dashboard.png` | React dashboard — live Athena query results |
-| `demo-01-ingest.gif` | POST /events → 200, event in S3 |
-| `demo-02-batch.gif` | POST /events/batch → accepted/rejected counts |
-| `demo-03-query.gif` | GET /query → Athena results in < 2 s |
+```bash
+cd terraform
+terraform destroy -var="environment=dev" -var="aws_region=us-east-1"
+```
+
+This removes all AWS resources. S3 buckets with objects must be emptied first:
+
+```bash
+aws s3 rm s3://$(terraform output -raw data_lake_bucket) --recursive
+aws s3 rm s3://$(terraform output -raw athena_output_bucket) --recursive
+terraform destroy -var="environment=dev" -var="aws_region=us-east-1"
+```
 
 ---
 
