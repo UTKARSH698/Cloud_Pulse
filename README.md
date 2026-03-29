@@ -3,12 +3,11 @@
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
 ![Terraform](https://img.shields.io/badge/Terraform-1.7-623CE4?logo=terraform&logoColor=white)
 ![AWS](https://img.shields.io/badge/AWS-Serverless-FF9900?logo=amazonaws&logoColor=white)
-![CI](https://img.shields.io/github/actions/workflow/status/UTKARSH698/CloudPulse/deploy.yml?label=CI%2FCD)
-![License](https://img.shields.io/badge/License-MIT-green)
+![CI](https://img.shields.io/github/actions/workflow/status/UTKARSH698/Cloud_Pulse/deploy.yml?label=CI%2FCD)
 
 A production-grade **Lambda Architecture** analytics platform (batch + speed layers) built entirely on AWS serverless services and managed with Terraform. Ingests analytics events via a JWT-secured REST API, streams them through Kinesis for real-time metrics, and stores them in a partitioned S3 data lake for historical SQL analytics via Athena — all within the AWS Free Tier.
 
-**Key numbers:** 1 000 events/batch · ~55 ms p50 ingest · < 10 s real-time lag · ~1.8 s Athena query · 5 Lambda functions · 15 Terraform files · ~$0 to run
+**Key numbers:** 1 000 events/batch · ~55 ms p50 ingest · < 10 s real-time lag · ~1.8 s Athena query · 5 Lambda functions · 15 Terraform files · < $1/day
 
 > **Portfolio context** — Third project in a series exploring AWS serverless patterns.
 > CloudFlow (SAGA / Step Functions) → CSPM (security posture) → **CloudPulse (analytics pipeline)**
@@ -283,6 +282,28 @@ curl ".../realtime" -H "Authorization: Bearer $TOKEN"
 
 Returns pre-aggregated per-minute counters from DynamoDB — no Athena involved, p50 ~12 ms.
 
+**Response 200**
+```json
+{
+  "lookback_minutes": 5,
+  "total_events": 342,
+  "error_count": 12,
+  "error_rate_pct": 3.5,
+  "active_sessions": 28,
+  "by_event_type": {
+    "page_view": 180,
+    "click": 95,
+    "api_call": 40,
+    "form_submit": 15,
+    "error": 12
+  },
+  "timeline": [
+    { "minute": "2026-03-09T14:21", "page_view": 38, "click": 20, "error": 3 },
+    { "minute": "2026-03-09T14:22", "page_view": 35, "click": 18, "error": 2 }
+  ]
+}
+```
+
 **Event schema**
 
 | Field | Type | Required | Notes |
@@ -310,8 +331,8 @@ Returns pre-aggregated per-minute counters from DynamoDB — no Athena involved,
 ### 1 — Clone and set up
 
 ```bash
-git clone https://github.com/UTKARSH698/CloudPulse
-cd CloudPulse
+git clone https://github.com/UTKARSH698/Cloud_Pulse
+cd Cloud_Pulse
 ```
 
 ### 2 — Install Lambda dependencies
@@ -482,14 +503,20 @@ Glue Crawler auto-discovers new S3 partition prefixes and registers them in the 
 
 Lambda environment variables are visible to anyone with `GetFunctionConfiguration`. SSM Parameter Store values are encrypted and access-controlled by IAM separately from the function config. Config changes take effect on the next Lambda cold start without redeployment.
 
-### Least-privilege IAM (3 roles, 8 policies)
+### Least-privilege IAM (8 roles, 22 policies)
+
+Every Lambda, Firehose, and Crawler gets its own IAM role. No role has `s3:DeleteObject`, `iam:*`, or wildcard resource ARNs.
 
 | Role | Key restrictions |
 |---|---|
-| Ingest | `s3:PutObject` on `events/*` prefix only. Cannot read or delete. |
-| Query | `s3:GetObject` on data lake. `s3:PutObject` on Athena output prefix only. |
-| Query | Athena scoped to `cloudpulse` workgroup. Glue scoped to `cloudpulse-dev` database. |
+| Ingest | `sqs:SendMessage` + `kinesis:PutRecord` + SSM read. Cannot read S3 or delete. |
+| Worker | `s3:PutObject` on `events/*` prefix only. `sqs:ReceiveMessage/DeleteMessage`. |
+| Stream Processor | `kinesis:GetRecords` + `dynamodb:UpdateItem/PutItem`. No S3 access. |
+| Realtime | `dynamodb:Query/GetItem` (read-only). No write access. |
+| Query | `s3:GetObject` on data lake. `s3:PutObject` on Athena output prefix only. Athena scoped to `cloudpulse` workgroup. Glue scoped to `cloudpulse-dev` database. |
+| Firehose | `kinesis:GetRecords` on stream + `s3:PutObject` on `stream-backup/*` only. |
 | Glue Crawler | S3 read on data lake only. No Lambda or SSM access. |
+| API Gateway | CloudWatch Logs write only (account-level setting for access logs). |
 
 ### Cognito JWT auth at the API layer
 
@@ -504,13 +531,17 @@ Authentication is enforced entirely at API Gateway — no auth code in the Lambd
 | Lambda | 1M requests/month | Well under for demo |
 | API Gateway | 1M calls/month (first 12 months) | Well under |
 | S3 | 5 GB storage, 20K GET, 2K PUT | ~500 events = < 1 MB |
+| DynamoDB | 25 GB storage, 25 WCU/RCU | < 1 MB, burst traffic only |
+| Kinesis | Not free tier | 1 shard = ~$0.36/day ($10.80/mo) |
+| Kinesis Firehose | Not free tier | ~$0.01/GB delivered |
+| SQS | 1M requests/month | Well under for demo |
 | Athena | $5/TB scanned | 100 MB cap = max $0.0005/query |
 | Cognito | 50,000 MAUs | 1 test user |
 | Glue Crawler | ~$0.07/run minimum | Manual runs only for demo |
 | CloudWatch | 10 metrics, 3 dashboards free | 1 dashboard, ~10 metrics |
 | SSM Parameter Store | Standard parameters free | 9 parameters |
 
-> **Cost to deploy and demo: effectively $0** (Glue Crawler runs are the only non-free item at ~$0.07/run; run it once manually after seeding).
+> **Cost to deploy and demo:** Kinesis ($0.36/day) + Firehose (pennies) + Glue Crawler ($0.07/run) are the non-free items. Tear down promptly after demoing to keep costs under ~$1.
 
 ---
 
