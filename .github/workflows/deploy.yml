@@ -263,14 +263,14 @@ jobs:
         run: |
           aws cognito-idp admin-create-user \
             --user-pool-id "${{ steps.tf_outputs.outputs.cognito_pool_id }}" \
-            --username "smoketest@cloudpulse.dev" \
-            --temporary-password "TempPass123!" \
+            --username "${{ secrets.SMOKE_TEST_USERNAME }}" \
+            --temporary-password "${{ secrets.SMOKE_TEST_PASSWORD }}" \
             --message-action SUPPRESS || true   # ignore if user already exists
 
           aws cognito-idp admin-set-user-password \
             --user-pool-id "${{ steps.tf_outputs.outputs.cognito_pool_id }}" \
-            --username "smoketest@cloudpulse.dev" \
-            --password "SmokeTest@9999" \
+            --username "${{ secrets.SMOKE_TEST_USERNAME }}" \
+            --password "${{ secrets.SMOKE_TEST_PASSWORD }}" \
             --permanent
 
       - name: Get Cognito ID token
@@ -280,7 +280,7 @@ jobs:
             --auth-flow USER_PASSWORD_AUTH \
             --client-id "${{ steps.tf_outputs.outputs.cognito_client_id }}" \
             --auth-parameters \
-                USERNAME=smoketest@cloudpulse.dev,PASSWORD=SmokeTest@9999 \
+                USERNAME=${{ secrets.SMOKE_TEST_USERNAME }},PASSWORD=${{ secrets.SMOKE_TEST_PASSWORD }} \
             --query 'AuthenticationResult.IdToken' \
             --output text)
           echo "token=$TOKEN" >> $GITHUB_OUTPUT

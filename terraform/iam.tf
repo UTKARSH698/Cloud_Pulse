@@ -237,6 +237,27 @@ resource "aws_iam_role_policy_attachment" "stream_processor_ssm" {
   policy_arn = aws_iam_policy.stream_processor_ssm.arn
 }
 
+data "aws_iam_policy_document" "stream_processor_dlq" {
+  statement {
+    sid    = "SendToKinesisDLQ"
+    effect = "Allow"
+    actions = [
+      "sqs:SendMessage",
+    ]
+    resources = [aws_sqs_queue.kinesis_dlq.arn]
+  }
+}
+
+resource "aws_iam_policy" "stream_processor_dlq" {
+  name   = "${local.name_prefix}-stream-processor-dlq"
+  policy = data.aws_iam_policy_document.stream_processor_dlq.json
+}
+
+resource "aws_iam_role_policy_attachment" "stream_processor_dlq" {
+  role       = aws_iam_role.stream_processor.name
+  policy_arn = aws_iam_policy.stream_processor_dlq.arn
+}
+
 data "aws_iam_policy_document" "stream_processor_logs" {
   statement {
     sid    = "CreateLogGroup"
