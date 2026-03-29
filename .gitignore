@@ -15,14 +15,11 @@ coverage.xml
 .coverage
 
 # Lambda deps installed into source dirs by CI
-lambdas/ingest/pydantic*
-lambdas/ingest/pydantic_core*
-lambdas/ingest/annotated_types*
-lambdas/ingest/typing_extensions*
-lambdas/query/pydantic*
-lambdas/query/pydantic_core*
-lambdas/query/annotated_types*
-lambdas/query/typing_extensions*
+lambdas/*/pydantic*
+lambdas/*/pydantic_core*
+lambdas/*/annotated_types*
+lambdas/*/typing_extensions*
+lambdas/*/typing_inspection*
 
 # Secrets
 *.env
