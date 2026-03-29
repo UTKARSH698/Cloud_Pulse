@@ -109,16 +109,21 @@ def handler(event: dict, context: Any) -> dict:
     records = event.get("Records", [])
     processed = 0
     failed = 0
+    batch_item_failures: list[dict[str, str]] = []
 
     for record in records:
         try:
             _process_record(table, record)
             processed += 1
         except Exception as exc:
-            logger.error(f"Failed to process record: {exc}")
+            logger.error(f"Failed to process record {record['kinesis']['sequenceNumber']}: {exc}")
             failed += 1
+            batch_item_failures.append(
+                {"itemIdentifier": record["kinesis"]["sequenceNumber"]}
+            )
 
     logger.info(f"Stream batch: processed={processed} failed={failed} total={len(records)}")
 
-    # Return nothing — Kinesis source mapping treats exceptions as failures
-    return {"processed": processed, "failed": failed}
+    # Report partial batch failures so only failed records are retried
+    # Requires function_response_types=["ReportBatchItemFailures"] in Terraform
+    return {"batchItemFailures": batch_item_failures}

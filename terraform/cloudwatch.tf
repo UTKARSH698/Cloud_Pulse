@@ -197,6 +197,23 @@ resource "aws_cloudwatch_metric_alarm" "sqs_dlq_depth" {
   }
 }
 
+resource "aws_cloudwatch_metric_alarm" "kinesis_dlq_depth" {
+  alarm_name          = "${local.name_prefix}-kinesis-dlq-depth"
+  alarm_description   = "Kinesis DLQ has messages — stream processor failed to write to DynamoDB after retries"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  namespace           = "AWS/SQS"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    QueueName = aws_sqs_queue.kinesis_dlq.name
+  }
+}
+
 # ------------------------------------------------------------
 # CloudWatch Dashboard
 # ------------------------------------------------------------

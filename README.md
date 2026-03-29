@@ -4,6 +4,7 @@
 ![Terraform](https://img.shields.io/badge/Terraform-1.7-623CE4?logo=terraform&logoColor=white)
 ![AWS](https://img.shields.io/badge/AWS-Serverless-FF9900?logo=amazonaws&logoColor=white)
 ![CI](https://img.shields.io/github/actions/workflow/status/UTKARSH698/Cloud_Pulse/deploy.yml?label=CI%2FCD)
+![License](https://img.shields.io/github/license/UTKARSH698/Cloud_Pulse)
 
 A production-grade **Lambda Architecture** analytics platform (batch + speed layers) built entirely on AWS serverless services and managed with Terraform. Ingests analytics events via a JWT-secured REST API, streams them through Kinesis for real-time metrics, and stores them in a partitioned S3 data lake for historical SQL analytics via Athena — all within the AWS Free Tier.
 
@@ -460,7 +461,7 @@ push to main / PR
                         └── start Glue Crawler
 ```
 
-**Secrets required:** `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`
+**Secrets required:** `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `SMOKE_TEST_USERNAME`, `SMOKE_TEST_PASSWORD`
 
 Manual deploys via `workflow_dispatch` support `dev`, `staging`, and `prod` environment targets with GitHub environment approval gates.
 
@@ -503,7 +504,7 @@ Glue Crawler auto-discovers new S3 partition prefixes and registers them in the 
 
 Lambda environment variables are visible to anyone with `GetFunctionConfiguration`. SSM Parameter Store values are encrypted and access-controlled by IAM separately from the function config. Config changes take effect on the next Lambda cold start without redeployment.
 
-### Least-privilege IAM (8 roles, 22 policies)
+### Least-privilege IAM (8 roles, 23 policies)
 
 Every Lambda, Firehose, and Crawler gets its own IAM role. No role has `s3:DeleteObject`, `iam:*`, or wildcard resource ARNs.
 
@@ -511,7 +512,7 @@ Every Lambda, Firehose, and Crawler gets its own IAM role. No role has `s3:Delet
 |---|---|
 | Ingest | `sqs:SendMessage` + `kinesis:PutRecord` + SSM read. Cannot read S3 or delete. |
 | Worker | `s3:PutObject` on `events/*` prefix only. `sqs:ReceiveMessage/DeleteMessage`. |
-| Stream Processor | `kinesis:GetRecords` + `dynamodb:UpdateItem/PutItem`. No S3 access. |
+| Stream Processor | `kinesis:GetRecords` + `dynamodb:UpdateItem/PutItem` + `sqs:SendMessage` (DLQ only). No S3 access. |
 | Realtime | `dynamodb:Query/GetItem` (read-only). No write access. |
 | Query | `s3:GetObject` on data lake. `s3:PutObject` on Athena output prefix only. Athena scoped to `cloudpulse` workgroup. Glue scoped to `cloudpulse-dev` database. |
 | Firehose | `kinesis:GetRecords` on stream + `s3:PutObject` on `stream-backup/*` only. |

@@ -215,14 +215,29 @@ resource "aws_lambda_function" "stream_processor" {
 }
 
 # Kinesis → Lambda event source mapping
-# bisect_on_function_error=true: if batch fails, split in half to isolate bad records
+# - ReportBatchItemFailures: only retry the specific records that failed, not the whole batch
+# - bisect_on_function_error: if the Lambda itself crashes, split the batch to isolate poison records
+# - maximum_retry_attempts: cap retries to avoid infinite loops on persistent failures
+# - maximum_record_age: skip records older than 1 hour (stale real-time data has no value)
 resource "aws_lambda_event_source_mapping" "kinesis_stream_processor" {
   event_source_arn                   = aws_kinesis_stream.events.arn
   function_name                      = aws_lambda_function.stream_processor.function_name
   starting_position                  = "LATEST"
   batch_size                         = 100
-  maximum_batching_window_in_seconds = 5   # collect up to 5 s of records before invoking
+  maximum_batching_window_in_seconds = 5
   bisect_batch_on_function_error     = true
+  maximum_retry_attempts             = 3
+  maximum_record_age_in_seconds      = 3600  # 1 hour — stale records skip to DLQ
+
+  # Enable partial batch success reporting — only failed records are retried
+  function_response_types = ["ReportBatchItemFailures"]
+
+  # Send records that exhaust retries to a DLQ for inspection
+  destination_config {
+    on_failure {
+      destination_arn = aws_sqs_queue.kinesis_dlq.arn
+    }
+  }
 }
 
 # ------------------------------------------------------------

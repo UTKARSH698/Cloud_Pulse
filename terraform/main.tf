@@ -21,20 +21,27 @@ terraform {
   }
 
   # ------------------------------------------------------------
-  # Remote state — S3 backend (free tier).
+  # Remote state — S3 backend with DynamoDB state locking.
   #
-  # Before first `terraform init`, create the bucket manually:
+  # Before first `terraform init`, create the resources manually:
   #   aws s3 mb s3://cloudpulse-tfstate-<your-account-id> --region us-east-1
+  #   aws s3api put-bucket-versioning --bucket cloudpulse-tfstate-<your-account-id> \
+  #     --versioning-configuration Status=Enabled
+  #   aws dynamodb create-table --table-name cloudpulse-tfstate-lock \
+  #     --attribute-definitions AttributeName=LockID,AttributeType=S \
+  #     --key-schema AttributeName=LockID,KeyType=HASH \
+  #     --billing-mode PAY_PER_REQUEST --region us-east-1
   #
   # Then uncomment this block and fill in your bucket name.
   # Keeping it commented lets the repo work with local state
   # out of the box for first-time reviewers.
   # ------------------------------------------------------------
   # backend "s3" {
-  #   bucket  = "cloudpulse-tfstate-<your-account-id>"
-  #   key     = "cloudpulse/terraform.tfstate"
-  #   region  = "us-east-1"
-  #   encrypt = true
+  #   bucket         = "cloudpulse-tfstate-<your-account-id>"
+  #   key            = "cloudpulse/terraform.tfstate"
+  #   region         = "us-east-1"
+  #   encrypt        = true
+  #   dynamodb_table = "cloudpulse-tfstate-lock"
   # }
 }
 
@@ -71,7 +78,7 @@ locals {
       Project     = var.project
       Environment = var.environment
       ManagedBy   = "terraform"
-      Repository  = "https://github.com/UTKARSH698/CloudPulse"
+      Repository  = "https://github.com/UTKARSH698/Cloud_Pulse"
     },
     var.tags,
   )

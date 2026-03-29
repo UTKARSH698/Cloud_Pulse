@@ -141,12 +141,16 @@ class TestHandler:
         ):
             result = stream_handler.handler(kinesis_event, None)
 
-        assert result["processed"] == 3
-        assert result["failed"] == 0
+        assert result["batchItemFailures"] == []
 
     def test_handles_malformed_record_gracefully(self):
-        # Bad base64 data
-        bad_record = {"kinesis": {"data": "!!!not_base64!!!"}}
+        # Bad base64 data with a sequence number for failure reporting
+        bad_record = {
+            "kinesis": {
+                "data": "!!!not_base64!!!",
+                "sequenceNumber": "49590338271490256608559692540925702759324208523137515522",
+            }
+        }
         kinesis_event = {"Records": [bad_record]}
 
         mock_dynamodb = MagicMock()
@@ -160,5 +164,5 @@ class TestHandler:
         ):
             result = stream_handler.handler(kinesis_event, None)
 
-        assert result["failed"] == 1
-        assert result["processed"] == 0
+        assert len(result["batchItemFailures"]) == 1
+        assert result["batchItemFailures"][0]["itemIdentifier"] == "49590338271490256608559692540925702759324208523137515522"

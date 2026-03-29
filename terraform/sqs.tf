@@ -61,3 +61,21 @@ resource "aws_sqs_queue" "events" {
     Name = "${local.name_prefix}-events-queue"
   }
 }
+
+# ------------------------------------------------------------
+# Kinesis stream processor DLQ — catches records that fail
+# after max retries from the Kinesis → Lambda event source.
+#
+# Unlike the SQS events DLQ (which catches SQS delivery failures),
+# this catches Kinesis records that the stream processor Lambda
+# couldn't write to DynamoDB after 3 retries.
+# ------------------------------------------------------------
+
+resource "aws_sqs_queue" "kinesis_dlq" {
+  name                      = "${local.name_prefix}-kinesis-dlq"
+  message_retention_seconds = 1209600   # 14 days
+
+  tags = {
+    Name = "${local.name_prefix}-kinesis-dlq"
+  }
+}
