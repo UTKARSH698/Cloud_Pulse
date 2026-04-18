@@ -546,6 +546,28 @@ Authentication is enforced entirely at API Gateway — no auth code in the Lambd
 
 ---
 
+## Known Limitations
+
+These are honest design boundaries — documented tradeoffs, not overlooked bugs.
+
+| Limitation | Root Cause | What Would Be Needed |
+|---|---|---|
+| **Speed layer and batch layer can diverge** — the real-time dashboard (DynamoDB, 24h TTL) and the historical analytics (S3/Athena) can show different counts for the same time window if the Kinesis → DynamoDB path and the SQS → S3 path process events at different rates | Dual-write architecture with no reconciliation step between the two paths | A periodic reconciliation job that compares DynamoDB counters against Athena aggregates for the same window and flags divergence |
+| **Glue Crawler must run manually to expose new partitions** — events ingested after the last crawler run are invisible to Athena until the crawler runs again | Glue Catalog is not updated automatically on S3 writes; partition discovery requires an explicit crawl | EventBridge rule triggering the crawler on a schedule, or Glue auto-crawl on S3 event notifications |
+| **No event deduplication on the ingest path** — if the client retries a failed POST, the same event can appear twice in S3 and be counted twice in Athena | Ingest Lambda does not check for duplicate `event_id` before writing to SQS/Kinesis | An idempotency table (as used in CloudFlow) keyed on `event_id`; skip write if already seen within a TTL window |
+| **Kinesis shard is a single point of throughput** — 1 shard = 1,000 records/sec or 1 MB/sec; above this, `ProvisionedThroughputExceededException` | Single-shard deployment for Free Tier cost; no auto-scaling configured | Kinesis enhanced fan-out + shard splitting on throughput alarms; or migrate to Kinesis Data Firehose for the speed path |
+| **Athena query results are not cached** — identical queries re-scan S3 and incur latency + cost each time | Query Lambda calls `StartQueryExecution` on every request; no result cache | ElastiCache or DynamoDB result cache keyed on query hash + date range; serve cached result if < N minutes old |
+
+### The Open Consistency Question
+
+The CAP theorem tension in CloudPulse is concrete: the speed layer (DynamoDB, eventually consistent reads) and the batch layer (Athena on S3) can disagree on event counts for the same window. This is an accepted tradeoff — but it raises a harder question: under what conditions does the divergence become a security concern?
+
+If the real-time dashboard is used for anomaly detection (error rate spikes, unusual session counts), a diverged speed layer could suppress or delay a genuine security signal. The batch layer would eventually correct it — but "eventually" may be after the incident window has closed.
+
+This is a specific instance of the general problem across all three projects: enforcing correct properties locally at each component (speed layer, batch layer) does not guarantee those properties hold at the system level. Formally specifying what "correct" means for a dual-layer analytics system — and proving that the reconciliation strategy maintains it — is an open question.
+
+---
+
 ## Teardown
 
 ```bash
@@ -565,5 +587,7 @@ terraform destroy -var="environment=dev" -var="aws_region=us-east-1"
 
 ## Author
 
-**Utkarsh** — B.Tech CSE (Cloud Technology & Information Security)
-GitHub: [UTKARSH698](https://github.com/UTKARSH698)
+**Utkarsh Batham** — B.Tech CSE (Cloud Technology & Information Security)
+
+[![GitHub](https://img.shields.io/badge/GitHub-UTKARSH698-181717?style=flat&logo=github)](https://github.com/UTKARSH698)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-utkarshbatham-0A66C2?style=flat&logo=linkedin&logoColor=white)](https://linkedin.com/in/utkarsh-batham-531913247)
