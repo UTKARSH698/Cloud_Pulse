@@ -523,6 +523,22 @@ Every Lambda, Firehose, and Crawler gets its own IAM role. No role has `s3:Delet
 
 Authentication is enforced entirely at API Gateway — no auth code in the Lambdas. A request with an expired or tampered token never reaches Lambda invocation.
 
+### Security at Every Layer
+
+CloudPulse treats security as an architectural property, not a post-deployment checklist. Each layer enforces its own constraint independently:
+
+| Layer | Security Control | What It Prevents |
+|---|---|---|
+| **API Gateway** | Cognito JWT authorizer — token validated before Lambda invocation | Unauthenticated access; expired/tampered tokens never reach compute |
+| **Ingest Lambda** | Pydantic schema validation + enum enforcement on `event_type` and `source` | Malformed or injection-carrying payloads rejected at entry |
+| **IAM roles** | 8 least-privilege roles — no role has `s3:DeleteObject`, `iam:*`, or wildcard ARNs | Lateral movement between services; a compromised Lambda cannot reach another service's data |
+| **Parameter Store** | Config encrypted at rest; IAM-gated access separate from function config | Secrets visible to anyone with `GetFunctionConfiguration` are eliminated |
+| **S3 data lake** | No public access; Worker role scoped to `events/*` prefix only | Data exfiltration via misconfigured bucket policy |
+| **Athena** | 100 MB per-query scan cap enforced at workgroup level | Runaway queries used as a DoS vector against the data lake |
+| **DynamoDB** | TTL auto-expiry (24h) limits real-time store growth; Stream Processor cannot read S3 | Data accumulation attacks; cross-service data access |
+
+The underlying design question — whether per-layer enforcement guarantees system-level security — is the same gap that CSPM and CloudFlow surface. This is the formal verification problem that motivates the research direction across all three projects.
+
 ---
 
 ## Free Tier Usage
