@@ -480,6 +480,10 @@ The system implements the classic **Lambda Architecture** pattern:
 
 The ingest Lambda **dual-writes**: first to SQS (durable, batch), then to Kinesis (fail-open, speed). If Kinesis is unavailable, the event is still persisted via the SQS → Worker → S3 path — the real-time dashboard shows stale data but no data is lost.
 
+### Partial batch failure isolation
+
+Both stream-consuming Lambdas — the SQS **Worker** and the Kinesis **Stream Processor** — report per-record failures via `ReportBatchItemFailures` instead of raising on the first bad record. A single poison message retries only itself and, after `maxReceiveCount`, lands in the DLQ; every other record in the same batch is acknowledged and never reprocessed. Without this, one malformed event in a 10-record batch would force all 10 to be redelivered — amplifying into duplicate S3 writes (Worker) or repeated counter increments (Stream Processor), and pushing otherwise-healthy messages toward the DLQ.
+
 ### S3 Hive-style partitioning
 
 ```
