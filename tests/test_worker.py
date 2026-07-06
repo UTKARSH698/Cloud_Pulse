@@ -141,8 +141,8 @@ class TestHandler:
 
         assert mock_s3.put_object.call_count == 3
 
-    def test_malformed_body_raises(self):
-        """Malformed message must raise so SQS can retry / DLQ."""
+    def test_malformed_body_reported_as_batch_failure(self):
+        """Malformed message must be reported so only it retries / hits DLQ."""
         bad_record = {"messageId": "bad-msg", "body": '{"no_s3_key": true}'}
         ev = _make_event([bad_record])
 
@@ -154,10 +154,12 @@ class TestHandler:
             patch.object(worker_handler, "_s3", mock_s3),
             patch.dict(worker_handler._param_cache, {}, clear=True),
         ):
-            with pytest.raises(KeyError):
-                worker_handler.handler(ev, None)
+            result = worker_handler.handler(ev, None)
 
-    def test_invalid_json_body_raises(self):
+        assert result == {"batchItemFailures": [{"itemIdentifier": "bad-msg"}]}
+        mock_s3.put_object.assert_not_called()
+
+    def test_invalid_json_body_reported_as_batch_failure(self):
         bad_record = {"messageId": "bad-json", "body": "not-json{{{"}
         ev = _make_event([bad_record])
 
@@ -169,8 +171,31 @@ class TestHandler:
             patch.object(worker_handler, "_s3", mock_s3),
             patch.dict(worker_handler._param_cache, {}, clear=True),
         ):
-            with pytest.raises(json.JSONDecodeError):
-                worker_handler.handler(ev, None)
+            result = worker_handler.handler(ev, None)
+
+        assert result == {"batchItemFailures": [{"itemIdentifier": "bad-json"}]}
+
+    def test_one_bad_record_does_not_fail_good_records(self):
+        """A single bad message must not force the whole batch to retry."""
+        good = _make_sqs_record(
+            {"s3_key": "events/ok.json", "record": {"event_id": "ok"}},
+            message_id="good-msg",
+        )
+        bad = {"messageId": "bad-msg", "body": "not-json{{{"}
+        ev = _make_event([good, bad])
+
+        mock_ssm = self._mock_ssm()
+        mock_s3  = MagicMock()
+
+        with (
+            patch.object(worker_handler, "_ssm", mock_ssm),
+            patch.object(worker_handler, "_s3", mock_s3),
+            patch.dict(worker_handler._param_cache, {}, clear=True),
+        ):
+            result = worker_handler.handler(ev, None)
+
+        mock_s3.put_object.assert_called_once()
+        assert result == {"batchItemFailures": [{"itemIdentifier": "bad-msg"}]}
 
     def test_ssm_failure_returns_500(self):
         from botocore.exceptions import ClientError

@@ -362,10 +362,12 @@ resource "aws_lambda_function" "worker" {
 }
 
 # SQS → Worker Lambda event source mapping
-# batch_size=10 limits blast radius if a batch fails (entire batch is retried)
+# ReportBatchItemFailures: the worker returns only the messageIds that failed,
+# so a single bad message retries itself instead of the whole batch of 10.
 resource "aws_lambda_event_source_mapping" "sqs_worker" {
-  event_source_arn = aws_sqs_queue.events.arn
-  function_name    = aws_lambda_function.worker.function_name
-  batch_size       = 10
-  enabled          = true
+  event_source_arn        = aws_sqs_queue.events.arn
+  function_name           = aws_lambda_function.worker.function_name
+  batch_size              = 10
+  enabled                 = true
+  function_response_types = ["ReportBatchItemFailures"]
 }

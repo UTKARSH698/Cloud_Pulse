@@ -11,8 +11,9 @@ SQS queue (events)
       2. For each SQS record in the batch:
          a. Parse message body  { "s3_key": "...", "record": {...} }
          b. Write the record JSON to s3://{bucket}/{s3_key}
-      3. On any error: raise so Lambda marks the message as not-deleted
-         → SQS retries (visibility timeout), then DLQ after maxReceiveCount
+      3. On a per-record error: report it via ReportBatchItemFailures so
+         ONLY that message is retried (visibility timeout), then DLQ after
+         maxReceiveCount — successfully written records are still deleted
 
 Why async, not in-line with the ingest Lambda?
 ----------------------------------------------
@@ -113,19 +114,22 @@ def _write_to_s3(bucket: str, s3_key: str, record: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def handler(event: dict, context: Any) -> None:
+def handler(event: dict, context: Any) -> dict:
     """
     SQS-triggered Lambda handler.
 
-    Processes each record in the batch; raises on any failure so SQS
-    retries the unprocessed messages and eventually moves them to the DLQ.
+    Processes each record independently and reports per-record failures via
+    ReportBatchItemFailures, so a single bad message only retries itself
+    instead of the whole batch. Requires function_response_types =
+    ["ReportBatchItemFailures"] on the SQS event source mapping in Terraform.
 
-    Partial-batch failure mode is not enabled, so if one record in a
-    batch fails the entire batch is retried. Batch size is kept small
-    (10) to limit the blast radius of a single bad message.
+    An SSM lookup failure still raises, since without the bucket name no
+    record in the batch can be processed.
     """
     env       = os.environ.get("ENVIRONMENT", "dev")
     s3_bucket = _get_parameter(f"/cloudpulse/{env}/s3_bucket")
+
+    batch_item_failures: list[dict[str, str]] = []
 
     for sqs_record in event["Records"]:
         message_id = sqs_record.get("messageId", "?")
@@ -133,10 +137,11 @@ def handler(event: dict, context: Any) -> None:
             body   = json.loads(sqs_record["body"])
             s3_key = body["s3_key"]
             record = body["record"]
-        except (json.JSONDecodeError, KeyError) as exc:
-            # Malformed message — log and raise so it lands in DLQ after retries
-            logger.error(f"messageId={message_id}: malformed SQS body — {exc}")
-            raise
+            _write_to_s3(s3_bucket, s3_key, record)
+            logger.info(f"messageId={message_id} processed OK")
+        except Exception as exc:
+            logger.error(f"messageId={message_id}: processing failed — {exc}")
+            batch_item_failures.append({"itemIdentifier": message_id})
 
-        _write_to_s3(s3_bucket, s3_key, record)
-        logger.info(f"messageId={message_id} processed OK")
+    # Only these messages are retried; the rest are deleted from the queue
+    return {"batchItemFailures": batch_item_failures}
