@@ -28,3 +28,7 @@ terraform/payload.json
 terraform/response.json
 frontend/node_modules
 frontend/dist
+
+# Local tooling artifacts
+.testvenv/
+.claude/

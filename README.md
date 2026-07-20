@@ -367,7 +367,7 @@ CLIENT_ID=$(terraform output -raw cognito_client_id)
 aws cognito-idp sign-up \
   --client-id $CLIENT_ID \
   --username your@email.com \
-  --password "YourPass@123"
+  --password "$YOUR_PASSWORD"
 
 aws cognito-idp admin-confirm-sign-up \
   --user-pool-id $USER_POOL_ID \
@@ -380,7 +380,7 @@ aws cognito-idp admin-confirm-sign-up \
 TOKEN=$(aws cognito-idp initiate-auth \
   --auth-flow USER_PASSWORD_AUTH \
   --client-id $CLIENT_ID \
-  --auth-parameters USERNAME=your@email.com,PASSWORD="YourPass@123" \
+  --auth-parameters USERNAME=your@email.com,PASSWORD="$YOUR_PASSWORD" \
   --query 'AuthenticationResult.AccessToken' --output text)
 ```
 

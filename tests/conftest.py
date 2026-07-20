@@ -20,6 +20,11 @@ import pytest
 # Make Lambda source directories importable without installing as packages
 # ---------------------------------------------------------------------------
 
+# Some handlers construct boto3 clients at import time. Ensure a region is
+# always present so collection works without AWS config (e.g. on CI).
+os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
+os.environ.setdefault("AWS_REGION", "us-east-1")
+
 REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(REPO_ROOT, "lambdas", "ingest"))
 sys.path.insert(0, os.path.join(REPO_ROOT, "lambdas", "query"))
