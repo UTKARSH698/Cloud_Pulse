@@ -158,7 +158,7 @@ cloudpulse/
 │   ├── main.tf                   # Provider, backend, locals
 │   ├── variables.tf              # All tuneable inputs with validation
 │   ├── s3.tf                     # Data lake + Athena output buckets
-│   ├── iam.tf                    # Least-privilege roles (3 roles, 8 policies)
+│   ├── iam.tf                    # Least-privilege roles (8 roles, 23 policies)
 │   ├── lambda.tf                 # Package + deploy all 5 functions
 │   ├── api_gateway.tf            # REST API, Cognito authorizer, CORS
 │   ├── cognito.tf                # User Pool, App Client, hosted UI domain
@@ -167,16 +167,16 @@ cloudpulse/
 │   ├── dynamodb.tf               # Real-time counters table (24h TTL)
 │   ├── glue.tf                   # Database, pre-seeded table, Crawler
 │   ├── athena.tf                 # Workgroup + 5 named queries
-│   ├── parameter_store.tf        # 9 SSM parameters
-│   ├── cloudwatch.tf             # 5 alarms + 8-widget dashboard
+│   ├── parameter_store.tf        # 12 SSM parameters
+│   ├── cloudwatch.tf             # 10 alarms + 10-widget dashboard
 │   └── outputs.tf                # API URL, quick-start guide
 ├── tests/
 │   ├── conftest.py               # Shared fixtures, mocked boto3
-│   ├── test_ingest.py            # 20 tests — happy path, validation, failures
+│   ├── test_ingest.py            # 25 tests — happy path, validation, failures
 │   ├── test_worker.py            # SQS batch processing, S3 write, DLQ
 │   ├── test_stream_processor.py  # Kinesis records, DynamoDB counter updates
 │   ├── test_realtime.py          # DynamoDB query, window logic
-│   └── test_query.py             # 25 tests — all query types, Athena failures
+│   └── test_query.py             # 26 tests — all query types, Athena failures
 ├── frontend/                     # React + Vite dashboard
 │   ├── src/
 │   │   ├── App.jsx               # Root — auth gate
@@ -437,7 +437,7 @@ pytest tests/ -v \
   --cov-report=term-missing
 ```
 
-Tests use mocked boto3 — no AWS credentials needed, runs in < 5 seconds.
+76 tests across all 5 Lambdas. Tests use mocked boto3 — no AWS credentials needed, runs in < 5 seconds. CI enforces ≥ 70% coverage (currently ~95%).
 
 ---
 
@@ -541,7 +541,7 @@ CloudPulse treats security as an architectural property, not a post-deployment c
 | **Athena** | 100 MB per-query scan cap enforced at workgroup level | Runaway queries used as a DoS vector against the data lake |
 | **DynamoDB** | TTL auto-expiry (24h) limits real-time store growth; Stream Processor cannot read S3 | Data accumulation attacks; cross-service data access |
 
-The underlying design question — whether per-layer enforcement guarantees system-level security — is the same gap that CSPM and CloudFlow surface. This is the formal verification problem that motivates the research direction across all three projects.
+The design principle here is defense-in-depth: each layer enforces its own constraint so that a failure or misconfiguration in one does not collapse the whole system. A caveat worth naming — per-layer controls holding individually does not automatically guarantee the system is secure end-to-end (e.g. the speed/batch divergence below can still mask a signal). Reasoning about those cross-layer interactions is where I'd take this next.
 
 ---
 
@@ -559,8 +559,8 @@ The underlying design question — whether per-layer enforcement guarantees syst
 | Athena | $5/TB scanned | 100 MB cap = max $0.0005/query |
 | Cognito | 50,000 MAUs | 1 test user |
 | Glue Crawler | ~$0.07/run minimum | Manual runs only for demo |
-| CloudWatch | 10 metrics, 3 dashboards free | 1 dashboard, ~10 metrics |
-| SSM Parameter Store | Standard parameters free | 9 parameters |
+| CloudWatch | 10 metrics, 3 dashboards free | 1 dashboard, 10 alarms |
+| SSM Parameter Store | Standard parameters free | 12 parameters |
 
 > **Cost to deploy and demo:** Kinesis ($0.36/day) + Firehose (pennies) + Glue Crawler ($0.07/run) are the non-free items. Tear down promptly after demoing to keep costs under ~$1.
 
@@ -578,13 +578,11 @@ These are honest design boundaries — documented tradeoffs, not overlooked bugs
 | **Kinesis shard is a single point of throughput** — 1 shard = 1,000 records/sec or 1 MB/sec; above this, `ProvisionedThroughputExceededException` | Single-shard deployment for Free Tier cost; no auto-scaling configured | Kinesis enhanced fan-out + shard splitting on throughput alarms; or migrate to Kinesis Data Firehose for the speed path |
 | **Athena query results are not cached** — identical queries re-scan S3 and incur latency + cost each time | Query Lambda calls `StartQueryExecution` on every request; no result cache | ElastiCache or DynamoDB result cache keyed on query hash + date range; serve cached result if < N minutes old |
 
-### The Open Consistency Question
+### Consistency tradeoff
 
-The CAP theorem tension in CloudPulse is concrete: the speed layer (DynamoDB, eventually consistent reads) and the batch layer (Athena on S3) can disagree on event counts for the same window. This is an accepted tradeoff — but it raises a harder question: under what conditions does the divergence become a security concern?
+The speed layer (DynamoDB, eventually consistent) and the batch layer (Athena on S3) can disagree on event counts for the same window — a deliberate CAP tradeoff, not a bug. It matters most when the real-time dashboard is used for anomaly detection: a lagging speed layer could delay a genuine error-rate spike, and while the batch layer corrects it eventually, "eventually" may fall outside the incident window.
 
-If the real-time dashboard is used for anomaly detection (error rate spikes, unusual session counts), a diverged speed layer could suppress or delay a genuine security signal. The batch layer would eventually correct it — but "eventually" may be after the incident window has closed.
-
-This is a specific instance of the general problem across all three projects: enforcing correct properties locally at each component (speed layer, batch layer) does not guarantee those properties hold at the system level. Formally specifying what "correct" means for a dual-layer analytics system — and proving that the reconciliation strategy maintains it — is an open question.
+The fix is the reconciliation job noted in the limitations table — periodically comparing DynamoDB counters against Athena aggregates and flagging drift. It's left out here to keep the demo within Free Tier, but it's the first thing I'd add for production use.
 
 ---
 
